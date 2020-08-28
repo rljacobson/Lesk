@@ -2,31 +2,32 @@
 
 ## In the beginning...
 
-In the beginning was `lex`, the standard lexical analyzer (lexer) generator on Unix. The beginning was 1975, and Alfred Aho had only just invented the mathematical machiner that powers `lex`, while Steve Johnson had just invented `yacc`. 
+In the beginning was lex, the standard lexical analyzer (lexer) generator on Unix. The beginning was 1975, and Alfred Aho had only just invented the mathematical machinery that powers lex, while Steve Johnson had just invented yacc. 
 
 > As should be obvious from the above, the outside of Lex is patterned on Yacc and the inside on Aho's string matching routines.  Therefore, both S. C.  Johnson and A. V. Aho are really originators of much of Lex, as well as debuggers of it.  Many thanks are due to both.
 >
 > ​			—*Lex - A Lexical Analyzer Generator*, M. E. Lesk and E. Schmidt
 
-Michael Lesk worked with a young intern named Eric Schmidt to produce `lex`. The haze of time has obscured how clever the name of Lesk's `lex` really is. 
+Michael Lesk worked with a young intern named Eric Schmidt to produce lex. The haze of time has obscured how clever the name of Lesk's lex really is. 
 
-Since that time, there have been countless literal and spiritual descendants of `lex`, most notably the mostly compatible `flex`, the *f* presumably standing for *fast*. Despite the multiplicity of competing tools, `lex` and `flex` have been a mainstay of the compiler writer's toolbox for nearly 50 years. I speculate that the maintanence of old codebases and familiarity with these tools have perpetuated their use. 
+Since that time, there have been countless literal and spiritual descendants of lex, most notably
+ the mostly compatible flex, the *f* presumably standing for *fast*. Despite the multiplicity of competing tools, lex and flex have been a mainstay of the compiler writer's toolbox for nearly 50 years. I speculate that the maintenance of old code bases and familiarity with these tools have perpetuated their use. 
 
 ## The Genesis of Lesk
 
 ### Whence
 
-`[RE-flex](https://www.genivia.com/doc/reflex/html/index.html)` is a modern reimagining of `flex` which provides source-file compatibility with `flex` (and `lex`), among many other features, written by Robert van Engelen in C++. (`RE-flex` is actually much more, a sort of swiss army knife for regex engines.)
+[RE-flex](https://www.genivia.com/doc/reflex/html/index.html) is a modern reimagining of flex which provides source-file compatibility with flex (and lex), among many other features, written by Robert van Engelen in C++. (RE-flex is actually much more, a sort of swiss army knife for regex engines.)
 
-`Lesk` is a rewrite of (some of) `RE-flex` in Rust. While the Rust ecosystem has several lexer tools, none of them are nearly as sophisticated as `flex`. It is a conspicuous hole in the ecosystem that `Lesk` intends to fill. Consider this my contribution to the "rewrite everything in Rust" hysteria. 
+Lesk is a rewrite of (some of) RE-flex in Rust. While the Rust ecosystem has several lexer tools, none of them are nearly as sophisticated as flex. It is a conspicuous hole in the ecosystem that Lesk intends to fill. Consider this my contribution to the "rewrite everything in Rust" hysteria. 
 
 ### Why
 
 But why do this? For several reasons:
 
-1. None of the Rust regex libraries are taylored to scanning.
+1. None of the Rust regex libraries are tailored to scanning.
 2. Rust's memory and concurrency safety guarantees are attractive to many people.
-3. My personal motivation: I want to write programs larger than 1000 LOC in Rust in order to understand the software engineering differences Rust has from other languages I know, and issues of software architecture do not readily present themselves in smaller codebases. Software engineering is much more than understanding syntax. Lesk will be 5,000-10,000 LOC, enough to be nontrivial.
+3. My personal motivation: I want to write programs larger than 1000 LOC in Rust in order to understand the software engineering differences Rust has from other languages I know, and issues of software architecture do not readily present themselves in smaller code bases. Software engineering is much more than understanding syntax. Lesk will be 5,000-10,000 LOC, enough to be nontrivial.
 4. Without intending to denigrate any other software developer, many of whom have been many times more successful in the discipline than I ever will be, it has been my experience that there is an acute lack of clean and readable code bases for such tools. 
 
 ### Relationship to RE-flex
