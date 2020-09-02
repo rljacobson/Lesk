@@ -13,11 +13,13 @@ use std::fmt::{Display, Formatter};
 use std::collections::BTreeSet;
 
 use super::*;
+use crate::valuecell::ValueCell;
 use limits::MAX_INDEX;
 
 
 // `PositionSet` is a `BTreeSet` because it needs to be hashable.
 pub type PositionSet = BTreeSet<Position>; //< Set of `Position`'s within the regex string.
+pub type VcPositionSet = ValueCell<PositionSet>;
 
 // region Constants
 
@@ -53,7 +55,7 @@ impl Display for Position{
     let mut formatted = String::new();
 
     if self.is_accept() {
-      formatted.push_str(&*format!(" ({})", self.accepts()));
+      formatted.push_str(&*format!("({})", self.accepts()));
 
       if self.is_lazy() {
         formatted.push_str(&*format!("?{}", self.lazy()));
@@ -63,11 +65,13 @@ impl Display for Position{
       }
     }
     else {
-      formatted.push_str(&*format!(" {}", self.idx()));
 
       if self.is_iterable() {
-        formatted.push_str(&*format!("{}.{}", self.iterations(),  self.idx()));
+        formatted.push_str(&*format!("{}.", self.iterations()));
       }
+
+      formatted.push_str(&*format!("{}", self.idx()));
+
       if self.is_lazy() {
         formatted.push_str(&*format!("?{}", self.lazy()));
       }
@@ -249,7 +253,7 @@ mod test {
     position = position.set_accept(true);
     assert_eq!(position.idx(), 65);
 
-    position = position.set_lazy(255);
+    position = position.set_lazy(255u64);
     assert_eq!(position.idx(), 65);
   }
 
@@ -290,7 +294,7 @@ mod test {
   fn lazy(){
     let mut position = Position(65);
     assert!(!position.is_lazy());
-    position = position.set_lazy(24);
+    position = position.set_lazy(24u64);
     assert!(position.is_lazy());
     assert_eq!(position.lazy(), 24);
   }

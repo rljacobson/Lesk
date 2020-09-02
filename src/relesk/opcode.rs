@@ -75,11 +75,37 @@ digits in the 7th and 8th places which make up `B4`.
 \* In fact, more is true: We must have `0 <= B4 <= 0x0D`, the second inequality distinguishing meta
 characters from other instructions in which `B3` happens to be zero.
 
+## Example
+
+Example from the documentation:
+
+```cpp
+REFLEX_CODE_DECL reflex_code_FSM[11] =
+{
+  0x617A0005, // 0: GOTO 5 ON a-z
+  0x5F5F0005, // 1: GOTO 5 ON _
+  0x415A0005, // 2: GOTO 5 ON A-Z
+  0x30390005, // 3: GOTO 5 ON 0-9
+  0x00FFFFFF, // 4: HALT
+  0xFF000001, // 5: TAKE 1
+  0x617A0005, // 6: GOTO 5 ON a-z
+  0x5F5F0005, // 7: GOTO 5 ON _
+  0x415A0005, // 8: GOTO 5 ON A-Z
+  0x30390005, // 9: GOTO 5 ON 0-9
+  0x00FFFFFF, // 10: HALT
+};
+```
+
 */
 
 use std::fmt::{Display, Formatter};
 
 use super::*;
+use bitmasks::*;
+use character::{Meta, Char};
+
+pub const OPCODE_REDO: Opcode = Opcode(REDO);
+pub const OPCODE_HALT: Opcode = Opcode(HALT);
 
 pub mod bitmasks {
   use super::Index32;
@@ -118,24 +144,13 @@ pub mod bitmasks {
 
 }
 
-use bitmasks::*;
-use character::{Meta, Char};
 
 /// 32-bit opcode word
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct Opcode(u32);
 
-// todo: Make constants/enum for these bit masks.
+
 impl Opcode {
-
-  /// Returns the redo opcode, a constant
-  pub fn redo() -> Opcode {
-    return Opcode(REDO);
-  }
-
-  /// Returns the halt opcode, a constant
-  pub fn halt() -> Opcode {
-    return Opcode(HALT);
-  }
 
   pub fn is_long(&self) -> bool {
     return (self.0 & OPCODE) == LONG_MARKER;
@@ -188,7 +203,7 @@ impl Opcode {
   }
 
   pub fn is_meta(&self) -> bool {
-    return ((self.0 & BYTE3) == 0) && ((self.0 >> BYTE4) > 0);
+    return ((self.0 & BYTE3) == 0) && ((self.0 & BYTE4) != 0);
   }
 
   /*
@@ -264,6 +279,7 @@ impl Display for Opcode{
 
 
 // region Opcode Construction Functions
+
 
 pub fn opcode_long(index: Index32) -> Opcode {
   return Opcode(LONG_MARKER | (index & LONG_INDEX));

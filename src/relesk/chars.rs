@@ -13,11 +13,10 @@
 
 
 use std::ops::{AddAssign, SubAssign, BitOrAssign, BitAndAssign, BitXorAssign, Add, Sub, BitOr,
-               BitAnd, BitXor, Not};
+               BitAnd, BitXor};
 use std::cmp::Ordering;
 
 use super::*;
-use crate::debug_log;
 
 
 // region POSIX Character Classes
@@ -25,6 +24,13 @@ use crate::debug_log;
 // The position of the POSIX class escape in the following string corresponds to the index of the
 // POSIX class information table.
 pub(crate) const POSIX_CLASS_ESCAPES : &[u8; 28] = b"__sSxX________hHdD__lL__uUwW";
+pub(crate) const ALL_CHARS: Chars = Chars{
+  b: [0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0]
+};
+pub(crate) const NON_NEWLINE_CHARS: Chars = Chars{
+
+  b: [0xFFFFFFFFFFFFFBFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0]
+};
 
 /// We can obtain a Posic class name by index.
 pub static POSIX_CLASS_NAMES: [&str; 14] = [
@@ -110,13 +116,14 @@ pub fn add_posix_class(c: Char, maybe_chars: &Option<&mut Chars>) -> Option<&'st
     let posix_class = POSIX_CLASSES[class_index/2];
 
     if let Some(&mut mut chars) = maybe_chars {
-      debug_log!("posix({})", POSIX_CLASS_NAMES[class_index/2]);
+      println!("posix({})", POSIX_CLASS_NAMES[class_index/2]);
       chars |= *posix_class;
       // Uppercase means, "anything NOT in the class", so we "flip" the bits, selecting all
       // chars not in the class.
       if c.is_uppercase() {
         // todo: Shouldn't we only flip the characters in the posix class?
         //       See https://github.com/Genivia/RE-flex/issues/82
+        //       Technically I think yes, but it appears `chars` is an output argument.
         chars.flip();
       }
     }
@@ -190,6 +197,7 @@ impl Chars {
   }
 
 
+  // Is `c` a subset of `self`?
   pub fn is_subset(&self, c: &Chars) -> bool {
     return (*c - *self).is_empty();
   }
@@ -214,7 +222,7 @@ impl Chars {
   }
 
 
-  // todo: This does not appear to be used and can easily be confused with the more common flip256.
+  // This does not appear to be used and can easily be confused with the more common flip256.
   /*
   /// Computes `!self` in-place.
   pub fn flip_all(&mut self) -> &Chars {
@@ -227,7 +235,7 @@ impl Chars {
   }
   */
 
-  /// Same as `flip_all()` but omits the meta characters `self.b[4]`.
+  /// Formerly `flip256()`. Same as `flip_all()` but omits the meta characters `self.b[4]`.
   pub fn flip(&mut self) -> &Chars {
     self.b[0] = !self.b[0];
     self.b[1] = !self.b[1];
@@ -238,9 +246,6 @@ impl Chars {
 
 
   pub fn swap(&mut self, c: &mut Chars) -> &mut Chars {
-    // let t: &mut Chars = c;
-    // c = self;
-    // self = t;
     std::mem::swap(self, c);
     return self;
   }
@@ -265,15 +270,15 @@ impl Chars {
     for i in 0..5 {
       // Find the largest index for which...
       if self.b[4 - i] != 0 {
-        for j in 0..64 {
-          // todo: use `leading_zeroes()`
-          // ... we find the highest set bit.
-          if (self.b[4 - i] & (1 << (63 - j))) != 0 {
-            // Reconstruct the number.
-            // The index is the upper 3 bits and the bit number is the lowest 6 bits.
-            return Char::from(((4 - i) << 6) + (63 - j));
-          }
-        }
+        // ... we find the highest set bit.
+        // Reconstruct the number.
+        // The index is the upper 3 bits and the bit number is the lowest 6 bits.
+        return Char::from(((4 - i) << 6) + self.b[4 - i].leading_zeros() as usize);
+        //for j in 0..64 {
+        //  if (self.b[4 - i] & (1 << (63 - j))) != 0 {
+        //    return Char::from(((4 - i) << 6) + (63 - j));
+        //  }
+        //}
       }
     }
     return Char(0);
@@ -407,20 +412,6 @@ impl BitXor for Chars{
   }
 
 }
-
-
-impl Not for Chars{
-  type Output = Chars;
-
-  // todo: Replace with `flip()` (originally `flip256()`)?
-  fn not(self) -> Chars {
-    let mut copy: Chars = self;
-    copy.flip();
-    return copy;
-  }
-
-}
-
 
 //
 // impl Eq for Chars{

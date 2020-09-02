@@ -12,7 +12,7 @@ use relesk::parser::Parser;
 
 fn main() {
     //let _parser = Parser::new("(?imsqx)abc*|ghj", "bimopf=one.h, one.cpp, two.cpp, stdout;qrswx");
-    let _parser = Parser::new("abc*|ghj", "");
+    let _parser = Parser::new("abc*?|g{1,5}hj", "");
 
     println!("Done!")
 }

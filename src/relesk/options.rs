@@ -164,8 +164,7 @@ impl Options {
           match &names.len() {
 
             0 => {
-              //Error
-              // todo: Make an error for this.
+              eprintln!("Warning: Option n was given, but no name was provided.")
             }
 
             1 => {

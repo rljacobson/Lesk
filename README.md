@@ -27,7 +27,9 @@ But why do this? For several reasons:
 
 1. None of the Rust regex libraries are tailored to scanning.
 2. Rust's memory and concurrency safety guarantees are attractive to many people.
-3. My personal motivation: I want to write programs larger than 1000 LOC in Rust in order to understand the software engineering differences Rust has from other languages I know, and issues of software architecture do not readily present themselves in smaller code bases. Software engineering is much more than understanding syntax. Lesk will be 5,000-10,000 LOC, enough to be nontrivial.
+3. My personal motivation: I want to write programs larger than 1000 LOC in Rust in order to
+ understand the software engineering differences Rust has from other languages I know, and issues
+  of software architecture do not readily present themselves in smaller code bases. Software engineering is much more than understanding syntax. Lesk will be 15,000-20,000 LOC, enough to be nontrivial.
 4. Without intending to denigrate any other software developer, many of whom have been many times more successful in the discipline than I ever will be, it has been my experience that there is an acute lack of clean and readable code bases for such tools. 
 
 ### Relationship to RE-flex
@@ -69,6 +71,4 @@ With modern templating tools like [Handlebars](https://handlebarsjs.com/),
 [liquid ](https://github.com/cobalt-org/liquid-rust),
 developing and maintaining the code that is generated is far easier. Coroutines and
 closures could potentially make faster lexers, though this theory has yet to be tested.
-
-# License, etc.
 

@@ -24,6 +24,7 @@ pub const LOOKAHEAD_MAX_IDX : Index32  = 0xFAFFFF;   //< max lookahead index
 
 
 // Hash Array Limits
+// Formerly HASH
 pub const HASH_MAX_IDX      : usize    = 0x1000;     //< size of the predict match array (4096)
 
 

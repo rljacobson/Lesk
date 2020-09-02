@@ -1,16 +1,16 @@
 #![allow(dead_code)]
 
 /*!
-  A `Group` represents a capture group in relesk. They are used during parsing and generating the
-  DFA (by the `Parser`) but are not used for matching. Their primary function is to own
-  information about each position within the regex that lie within the group.
 
-  Strictly speaking, a `Group` can also be an alternation of string literals, which could be
+  A `Group` represents a *thing that can match*^[1] in relesk. They are used during parsing and
+  generating the DFA (by the `Parser`) but are not used for matching. Their primary function is to
+  own information about each position within the regex that lie within the group.
+
+  [1]: Strictly speaking, a `Group` can also be an alternation of string literals, which could be
   multiple matching groups.
 */
 
 use std::fmt::{Display, Formatter};
-//use std::cell::RefCell;
 
 use patricia_tree::PatriciaMap;
 
@@ -105,7 +105,7 @@ impl Group {
 
     for p in last_positions.iter(){
       self.append_idx_as_lazy_accepted(
-        &mut follow_map[p.idx().into()]
+        &mut *follow_map[Position(p.idx().into())].borrow_mut()
       );
     }
   }

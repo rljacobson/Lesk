@@ -1,36 +1,50 @@
 #![allow(dead_code)]
 
+/*!
 
+Parses and compiles a regex. Parsing and compilation are not altogether separate. Parsing of
+character lists `[abc]` is deferred until compilation, as there is almost nothing to parse.
+
+*/
+
+
+use std::cell::RefMut;
 use std::cmp::max;
+use std::collections::hash_map::Entry;
+use std::ops::Deref;
 use std::time::Duration;
 
 use defaultmap::DefaultHashMap;
 use quanta::Clock;
-use crate::valuecell::ValueCell;
 
-use super::*;
+use chars;
+use chars::{ALL_CHARS, NON_NEWLINE_CHARS, POSIX_CLASS_NAMES, POSIX_CLASSES};
 use error::RegexError;
 use group::{Group, TargetSet};
 use limits::{MAX_INDEX, MAX_ITER};
-use modifier::Mode;
-use modifier::Modifiers;
+use modifier::{Mode, Modifiers};
 use options::Options;
-use chars;
-use crate::relesk::chars::{POSIX_CLASS_NAMES, POSIX_CLASSES};
+use position::VcPositionSet;
+use state::{State, StateNextIterator, VcState};
 
+use crate::relesk::compiler::Compiler;
+use crate::valuecell::ValueCell;
+
+use super::*;
+use std::collections::BTreeSet;
+use core::num::dec2flt::parse::ParseResult::Valid;
 
 static END_ESCAPE_OPTION : &[u8; 39] = b"0123456789<>ABDHLNPSUWXbcdehijklpsuwxz\0";
 static META_OPS          : &[u8;  9] = b".^$([{?*+";
-static CODE_EXTENSIONS   : [&str; 4] = [".h", ".hpp", ".cpp", ".cc"];
-static DFA_EXTENSIONS    : [&str; 1] = [".gv"];
 
 #[derive(Default)]
 pub struct Parser<'a> {
-  idx       : Index32,   //< Cursor into `self.regex`
-  modifiers : Modifiers, //< Describes which modifiers are active at which positions in the regex
   options   : Options,   //< Pattern compiler options
+  modifiers : Modifiers, //< Describes which modifiers are active at which positions
+  // in the regex
   regex     : &'a [u8],  //< Regular expression string as bytes
 
+  idx            : Index32,          //< Cursor into `self.regex`
   group          : ValueCell<Group>, //< The outermost matching group representing the entire regex
   next_group_idx : Index32,          //< A "global" variable keeping track of the index for the next new group
   is_first_group : bool,             //< Only true while parsing the outer-most group
@@ -38,7 +52,7 @@ pub struct Parser<'a> {
 
 
   // Shared?
-  pub lazy_set: HashSet<Lazy8>, //< Positions in the regex that are lazily matched.
+  pub lazy_set : HashSet<Lazy8>, //< Positions in the regex that are lazily matched.
 
   /// For each position in the group, which positions can follow it.
   pub follow_positions_map : FollowMap,
@@ -46,22 +60,111 @@ pub struct Parser<'a> {
 
 
   /**
+
   Maps a top-level group index to the set of lookaheads for that index. The keys are `Index32`s, and
   the values are `PositionSet`s. The `lookahead` `PositionSet` for a subgroup is obtained by using
   `group.idx` as a key.
+
+  From the docs:
+
+    A lookahead pattern φ(?=ψ) matches φ only when followed by pattern ψ. The text matched by ψ is
+    not consumed.
+
+    Boost.Regex and PCRE2 matchers support lookahead φ(?=ψ) and lookbehind φ(?<=ψ) patterns that may
+    appear anywhere in a regex. The RE/flex matcher supports lookahead at the end of a pattern,
+    similar to Trailing context.
 
   Subgroups are Consulted in `parse_iterated` (parse2) and filled in `parse_alternations` (parse4).
   */
   pub lookahead_map: DefaultHashMap<Index32, IndexRanges>,
 
-  //Timing
-  parse_time: Duration
-}
+  // Compiler
 
+  start  : VcState,
+  moves  : MoveVec,
+  // todo: only needed if reading in before parse??
+  prefix : Vec<u8>, //< pattern prefix, shorter or equal to 255 bytes
+
+  vertex_count       : usize,       //< number of finite state machine vertices |V|
+  edge_count         : usize,       //< number of finite state machine edges |E|
+
+  subpattern_endpoints: Vec<Index32>, //< entries point to the subpattern's ending '|' or '\0'
+  subpattern_is_accepting: Vec<bool>,  //< true if subpattern n is accepting (state is reachable)
+
+
+
+
+  // Benchmark/Diagnostic data.
+  pub parse_time      : Duration,
+  pub vertices_time   : Duration, //< ms elapsed DFA vertices construction time
+  pub edges_time      : Duration, //< ms elapsed DFA edges construction time
+  pub code_words_time : Duration, //< ms elapsed code words assembly time
+
+}
+/*
+impl<'a> Default for Parser<'a> {
+  fn default() -> Self {
+    Parser{
+
+      // Parser //
+
+      options        : Default::default(),
+      modifiers      : Default::default(),
+      regex          : &[],
+      idx            : 0,
+     //tree_dfa            : Tree::new(),
+      group          : Default::default(),
+      next_group_idx : 0,
+      is_first_group : false,
+
+      lazy_set             : Default::default(),
+      follow_positions_map : Default::default(),
+      start_positions      : Default::default(),
+      lookahead_map        : Default::default(),
+
+
+      // Compiler //
+
+      vertex_count   : 0,
+      edge_count     : 0,
+      opcode_count   : 0,
+      opcode_table   : Vec::new(),
+      start          : VcState::default(),
+      moves          : MoveVec::new(),
+      prefix         : Vec::new(),
+      one_pre_string : false,
+
+      min_pattern_length      : 0,  //< patterns after the prefix are also bound above by 8.
+      subpattern_endpoints    : Vec::new(),
+      subpattern_is_accepting : Vec::new(),
+
+      // Match Predictor Tables
+      prediction_bitmap_array: Vec::new(),
+      predict_match_hashes   : [0; limits::HASH_MAX_IDX as usize], //< predict-match hash array
+      predict_match_array    : [0; limits::HASH_MAX_IDX as usize],
+
+
+
+      // Benchmark/Diagnostic data. //
+
+      parse_time      : Default::default(),
+      vertices_time   : Duration::default(), //< ms elapsed DFA vertices construction time
+      edges_time      : Duration::default(), //< ms elapsed DFA edges construction time
+      code_words_time : Duration::default(), //< ms elapsed code words assembly time
+
+    }
+
+
+  }
+}
+*/
 impl<'a> Parser<'a> {
 
   pub fn new<'p>(regex: &'p str, options_string: &'p str) -> Parser<'p>{
-    let mut parser: Parser = Parser::default();
+    let mut parser: Parser = Parser{
+      next_group_idx: 1,
+      ..Parser::default()
+    };
     parser.options.parse_options(options_string);
 
     parser.regex = regex.as_bytes();
@@ -79,22 +182,38 @@ impl<'a> Parser<'a> {
 
     // start state = start_positions = first_position of the self.follow_positions_map NFA, also
     // merge the tree DFA root when non-std::ptr::null()=
-    //self.start = State::new();
+    self.start = VcState::new(State::default());
     // Compile the NFA into a DFA
-    //self.compile();
+    self.compile();
+
+
     // Assemble DFA opcode tables or direct code
-    //self.assemble();
+    let mut compiler = Compiler::new(
+      self.regex,
+      self.start.clone(),
+      self.prefix.clone(),
+      &self.options
+    );
+    compiler.assemble();
   }
 
   // region Inlined Methods
 
+  #[must_use]
+  fn follow_positions<I>(&mut self, index: I) -> RefMut<PositionSet>
+    where I: Into<Position>
+  {
+    VcPositionSet::borrow_mut(self.follow_positions_map.get_mut(index.into()))
+  }
+
   /// Returns the character at the index `idx` of the regular expression.
   #[must_use]
-  fn at(&self, idx: Index32) -> Char {
+  pub(crate) fn at(&self, idx: Index32) -> Char {
     if idx >= self.regex.len() as Index32 {
       // We do not return `Option<Char>` to keep unwrapping to reasonable levels.
       return '\0'.into();
     }
+    println!("self.at({}) == {}", idx, self.regex[idx as usize] as char);
     Char::from(self.regex[idx as usize])
   }
 
@@ -109,6 +228,7 @@ impl<'a> Parser<'a> {
   fn ci(&mut self) -> Char{
     self.idx += 1;
     self.at(self.idx-1)
+
   }
 
 
@@ -168,11 +288,30 @@ impl<'a> Parser<'a> {
     .and_then(|index| Some(idx + (index as Index32)))
   }
 
-  
+
+
+  // Compiler-related inlined methods
+
+
+  /**
+  Check if subpattern is reachable by a match.
+
+  @returns true if subpattern is reachable
+  */
+  #[must_use]
+  pub fn is_reachable(&self, choice: GroupIndex32) -> bool {
+    return choice >= 1 &&
+    choice <= self.subpattern_endpoints.len() as GroupIndex32 &&
+    self.subpattern_is_accepting[choice as usize - 1];
+  }
+
+
+
 
 
   // endregion
 
+  // region Parser Methods
 
   /**
   ## Stage 0A
@@ -239,10 +378,7 @@ impl<'a> Parser<'a> {
               loop {
                 end += 1;
                 c = self.at(end);
-                if c == '\0' {
-                  break;
-                }
-                if c == self.options.escape_character && self.at(end + 1) == 'E' {
+                if c == '\0' || c == self.options.escape_character && self.at(end + 1) == 'E' {
                   break;
                 }
               }
@@ -258,8 +394,7 @@ impl<'a> Parser<'a> {
 
         let mut quote: bool = false;
         while self.idx < end {
-          let mut c: Char = self.c();
-          self.idx += 1;
+          let mut c: Char = self.ci();
           if c == self.options.escape_character {
             if self.c() == 'Q' {
               quote = true;
@@ -272,8 +407,7 @@ impl<'a> Parser<'a> {
               continue;
             }
             if !quote {
-              self.idx += 1;
-              c = self.c();
+              c = self.ci();
               // If it's an escape character, convert to the ASCII character it refers to.
               if let Some(descaped_c) = Char::try_from_escape(c) {
                 c = descaped_c
@@ -301,11 +435,11 @@ impl<'a> Parser<'a> {
         group_ref.append_idx_for_last_positions(&mut self.follow_positions_map);
       }
 
-      if self.c() != '|' {
-        self.idx += 1;
+      // choice++  ??
+
+      if self.ci() != '|' {
         break;
       }
-      self.idx += 1;
     }
 
     if self.options.insensitive_case {
@@ -325,12 +459,27 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "DEBUG")]
     {
       print!("start_positions = {{");
-      self.debug_log_position_set(&self.start_positions, 0);
+      debug_log_position_set(&self.group.borrow().first_positions, 0);
       println!("}}");
+      print!("follow_positions = {{");
+      debug_log_position_set(&self.group.borrow().last_positions, 0);
+      println!("}}");
+      print!("lazy_set = {{");
+      debug_log_position_set(&self.group.borrow().lazy_set, 0);
+      println!("}}");
+
+
       self.debug_log_follow_map(0);
+
+      println!("Strings = {{ {} }}",
+               self.group.borrow().string_trie.iter().map(
+                 | x | std::str::from_utf8(x.0.as_slice()).unwrap().to_string()
+               ).collect::<Vec<String>>().join(", ")
+      );
+
     }
     println!("END parse()");
-    println!("Duration: {}", self.parse_time.as_millis());
+    println!("Parse time: {}μs", self.parse_time.as_micros());
   }
 
 
@@ -340,7 +489,7 @@ impl<'a> Parser<'a> {
   enabled and the mode modifiers after the dash are disabled.
   */
   fn parse_global_modifiers(&mut self){
-    println!("BEGIN parse_global_modifiers() <parse0B>");
+    //println!("BEGIN parse_global_modifiers() <parse0B>");
 
     if self.c() == '(' && self.at(1) == '?' {
       self.idx = 2;
@@ -381,8 +530,7 @@ impl<'a> Parser<'a> {
               RegexError::InvalidModifier(self.idx).emit();
             }
           }
-          self.idx += 1;
-          c = self.c().into();
+          c = self.cr().into();
         }
         println!(")");
         // Skip the ')'
@@ -411,12 +559,13 @@ impl<'a> Parser<'a> {
 
     // Called with provided group
     self.parse_anchors(group);
-    
+
     let mut new_group = Group::default();
-    new_group.idx = self.next_group_index();
+    new_group.idx = group.idx;
     new_group.lazy_index = group.lazy_index;
 
-    while self.ci() == '|' {
+    while self.c() == '|' {
+      self.idx += 1;
 
       self.parse_anchors(&mut new_group);
       // Update the old values.
@@ -424,11 +573,14 @@ impl<'a> Parser<'a> {
       group.last_positions.extend(new_group.last_positions.iter());
       group.lazy_set.extend(new_group.lazy_set.iter());
 
-      
+
       group.nullable   = new_group.nullable || group.nullable;
       group.iteration = max(new_group.iteration, group.iteration);
     }
 
+
+    group.debug_log_position_set(TargetSet::First, 0);
+    group.debug_log_position_set(TargetSet::Last, 0);
     println!("END parse_alternations");
   }
 
@@ -438,7 +590,7 @@ impl<'a> Parser<'a> {
   Parses anchored groups
   */
   fn parse_anchors(&mut self, group: &mut Group){
-    
+
     println!("BEGIN parse_anchors({}) <parse2>", self.idx);
 
     let mut anchor_positions: PositionSet = PositionSet::default();
@@ -451,8 +603,7 @@ impl<'a> Parser<'a> {
 
         // Check for BOL anchor
         if self.c() == '^' {
-          anchor_positions.insert(Position(self.idx as u64));
-          self.idx += 1;
+          anchor_positions.insert(Position(self.ci().0 as u64));
           self.is_first_group = false; // CHECKED algorithmic options: 7/29 but does not allow ^ as a pattern
         }
         /*
@@ -485,7 +636,7 @@ impl<'a> Parser<'a> {
     self.parse_iterated(group);
 
     let mut new_group = Group::default();
-    new_group.idx = self.next_group_index();
+    new_group.idx = group.idx;
     new_group.lazy_index = group.lazy_index;
 
     let mut c: Char = self.c();
@@ -523,7 +674,7 @@ impl<'a> Parser<'a> {
 
 
       for p in group.last_positions.iter() {
-        self.follow_positions_map.get_mut(p.idx().into()).extend(new_group.first_positions.iter());
+        self.follow_positions(p.idx()).extend(new_group.first_positions.iter());
       }
 
       if group.nullable {
@@ -551,10 +702,10 @@ impl<'a> Parser<'a> {
           // todo: Can group.idx be trusted to give the right `lookahead` set?
           && self.lookahead_map[group.idx].contains(&k.idx())
         {
-          self.follow_positions_map.get_mut(p.idx().into()).insert(*k);
+          self.follow_positions(p.idx()).insert(*k);
         }
 
-        self.follow_positions_map.get_mut(k.idx().into()).insert(
+        self.follow_positions(k.idx()).insert(
           p.set_anchor( !group.nullable || k.idx() != p.idx() )
         );
       }
@@ -567,6 +718,11 @@ impl<'a> Parser<'a> {
         group.nullable = false;
       }
     }
+
+    println!("group.first_positions = ");
+    group.debug_log_position_set(TargetSet::First, 0);
+    println!("group.last_positions = ");
+    group.debug_log_position_set(TargetSet::Last, 0);
     println!("END parse_anchors()");
   }
 
@@ -600,7 +756,7 @@ impl<'a> Parser<'a> {
     let mut c: Char = self.c();
     if self.options.x_freespacing {
       while c.is_whitespace() {
-        c = self.ci();
+        c = self.cr();
       }
     }
 
@@ -609,8 +765,7 @@ impl<'a> Parser<'a> {
         if c == '*' || c == '?' {
           group.nullable = true;
         }
-        self.idx += 1;
-        if self.c() == '?' {
+        if self.cr() == '?' {
 
           group.increment_lazy_index();
 
@@ -627,13 +782,13 @@ impl<'a> Parser<'a> {
         if c == '+' && !group.nullable && !self.lazy_set.is_empty() {
           let more_first_positions: PositionSet = group.lazify(&group.first_positions);
           for p in group.last_positions.iter() {
-            self.follow_positions_map[p.idx().into()].extend(more_first_positions.iter());
+            self.follow_positions(p.idx()).extend(more_first_positions.iter());
           }
           group.first_positions.extend(more_first_positions.iter());
         }
         else if c == '*' || c == '+' {
           for p in group.last_positions.iter() {
-            self.follow_positions_map[p.idx().into()].extend(group.first_positions.iter());
+            self.follow_positions(p.idx()).extend(group.first_positions.iter());
           }
         }
       }
@@ -659,8 +814,6 @@ impl<'a> Parser<'a> {
         }
 
         if self.c() == '}' {
-          // todo: Is nullable1 (now old_nullable_value) necessary? It retains the previous value
-          //       beforing setting group.nullable if n = 0.
           let old_nullable_value: bool = group.nullable;
 
           if n == 0 {
@@ -671,9 +824,8 @@ impl<'a> Parser<'a> {
             RegexError::InvalidRepeat(self.idx).emit();
           }
 
-          self.idx += 1;
 
-          if self.c() == '?' {
+          if self.cr() == '?' {
             group.increment_lazy_index();
 
             self.lazy_set.insert(group.lazy_index);
@@ -705,9 +857,7 @@ impl<'a> Parser<'a> {
 
           if group.nullable && unlimited {  // {0,} == *
             for p in group.last_positions.iter() {
-              self.follow_positions_map
-                  .get_mut(p.idx().into())
-                  .extend(group.first_positions.iter());
+              self.follow_positions(p.idx()).extend(group.first_positions.iter());
             }
           }
           else if m > 0 {
@@ -716,12 +866,13 @@ impl<'a> Parser<'a> {
             }
             { // scope of more_follow_positions
               // update self.follow_positions_map by virtually repeating sub-regex m-1 times
-              let mut more_follow_positions: FollowMap = FollowMap::default();
+              let more_follow_positions: FollowMap = FollowMap::default();
               for (position, positions_set) in self.follow_positions_map.iter() {
                 if position.idx() >= original_position.idx() {
                   for i in 0..m - 1 {
-                    for p in positions_set.iter() {
+                    for p in positions_set.borrow().iter() {
                       more_follow_positions[position.increment_iter(group.iteration * (i + 1))]
+                      .borrow_mut()
                       .insert(p.increment_iter(group.iteration * (i + 1)));
                     }
                   }
@@ -729,7 +880,7 @@ impl<'a> Parser<'a> {
               }
 
               for (position, positions_set) in more_follow_positions.iter() {
-                self.follow_positions_map.get_mut(*position).extend(positions_set.iter());
+                self.follow_positions(*position).extend(positions_set.borrow().iter());
               }
             }
 
@@ -737,7 +888,7 @@ impl<'a> Parser<'a> {
             for i in 0..m - 1 {
               for k in group.last_positions.iter() {
                 for j in group.first_positions.iter() {
-                  self.follow_positions_map.get_mut(
+                  self.follow_positions(
                     Position(k.idx().into()).increment_iter(group.iteration * i)
                   ).insert(j.increment_iter(group.iteration *( i + 1)));
                 }
@@ -746,21 +897,23 @@ impl<'a> Parser<'a> {
             if unlimited {
               for k in group.last_positions.iter() {
                 for j in group.first_positions.iter() {
-                  self.follow_positions_map.get_mut(
+                  self.follow_positions(
                     Position(k.idx().into()).increment_iter(group.iteration * (m - 1))
                   ).insert(j.increment_iter(group.iteration * (m - 1)));
                 }
               }
             }
             if old_nullable_value {
-              // extend group.first_positions when sub-regex is group.nullable
+              // If subgroup was already nullable, take all first_positions and add them again with
+              // all possible values for iteration set (extend group.first_positions when sub-regex
+              // is group.nullable).
               let mut more_first_positions = PositionSet::new();
               for i in 1..m {
                 for k in group.first_positions.iter() {
                   more_first_positions.insert(k.increment_iter(group.iteration * i));
                 }
               }
-              group.first_positions.extend(more_first_positions.iter());
+              group.first_positions.append(&mut more_first_positions);
             }
             { // scope of new_last_positions
               // n to m-1 are optional with all 0 to m-1 are optional when group.nullable
@@ -794,6 +947,11 @@ impl<'a> Parser<'a> {
       }
       c = self.c();
     }
+
+    //println!("group.first_positions = ");
+    group.debug_log_position_set(TargetSet::First, 0);
+    //println!("group.last_positions = ");
+    group.debug_log_position_set(TargetSet::Last, 0);
     println!("END parse_iterated()");
   }
 
@@ -803,9 +961,8 @@ impl<'a> Parser<'a> {
     let mut c: Char;
     let mut k: usize = 0;
 
-    // todo: ...why 7?
     for _i in 0..7 {
-      c = self.ci();
+      c = self.cr();
       if !c.is_digit() {
         break;
       }
@@ -824,7 +981,7 @@ impl<'a> Parser<'a> {
   fn parse_sequence(&mut self, group: &mut Group) {
     println!("BEGIN parse_sequence({}) <parse4>", self.idx);
 
-    // todo: necessary?
+    // todo: Should this just be a new group?
     group.first_positions.clear();
     group.last_positions.clear();
     group.lazy_set.clear();
@@ -834,28 +991,28 @@ impl<'a> Parser<'a> {
     let mut c: Char = self.c();
 
     if c == '(' {
-      self.idx += 1;
-
-      if self.c() == '?' {
+      if self.cr() == '?' {
 
         c = self.cr();
 
         if c == '#' { // (?# comment
           // Fast forward to the end of the comment.
           if let Some(offset) = self.regex[self.idx as usize..].iter().position(|&x| x == b')') {
-            self.idx += offset as Index32;
+            self.idx += offset as Index32 + 1;
           } else {
             RegexError::MismatchedParens(self.idx).emit();
           }
-        } else if c == '^' { // (?^ negative pattern to be ignored (mode: new) {
+        }
+        else if c == '^' { // (?^ negative pattern to be ignored (mode: new) {
           self.idx += 1;
 
           self.parse_alternations(group);
 
           for p in group.last_positions.iter() {
-            self.follow_positions_map.get_mut(p.idx().into()).insert(Position(0).set_accept(true));
+            self.follow_positions(p.idx()).insert(Position(0).set_accept(true));
           }
-        } else if c == '=' { // (?= lookahead
+        }
+        else if c == '=' { // (?= lookahead
           let lookahead_start: Position = (self.idx - 2).into(); // lookahead at (
           self.idx += 1;
 
@@ -877,20 +1034,22 @@ impl<'a> Parser<'a> {
             }
           }
 
+          let ticked_position = Position(self.idx.into()).set_ticked(true);
           for p in group.last_positions.iter() {
-            self.follow_positions_map
-                .get_mut(p.idx().into())
-                .insert(Position(self.idx.into()).set_ticked(true));
+            self.follow_positions(p.idx())
+                .insert(ticked_position);
           }
-          group.last_positions.insert(Position(self.idx.into()).set_ticked(true));
+          group.last_positions.insert(ticked_position);
           if group.nullable {
-            group.first_positions.insert(Position(self.idx.into()).set_ticked(true));
+            group.first_positions.insert(ticked_position);
             group.last_positions.insert(lookahead_start);
           }
-        } else if c == ':' {
+        }
+        else if c == ':' {
           self.idx += 1;
           self.parse_alternations(group);
-        } else {
+        }
+        else {
           let mut modifier_start: Index32 = self.idx;
 
           // Store original x/q options, as a recursive call could change them.
@@ -911,7 +1070,7 @@ impl<'a> Parser<'a> {
 
             c = self.cr();
 
-            if !(c != '\0' && c != ':' && c != ')') {
+            if c == '\0' || c == ':' || c == ')' {
               break;
             }
           }
@@ -929,7 +1088,8 @@ impl<'a> Parser<'a> {
             modifier_start += 1;
             if c == '-' {
               active = false;
-            } else if c != '\0' && c != 'q' && c != 'x' && c != ':' && c != ')' {
+            }
+            else if c != '\0' && c != 'q' && c != 'x' && c != ':' && c != ')' {
               if active {
                 self.modifiers.set(
                   Mode::from(c),
@@ -948,7 +1108,6 @@ impl<'a> Parser<'a> {
           }
 
           // Restore original x/q option values
-          // todo: self.options should only be for global-only modes. All other modes set at init.
           self.options.quote_with_x = opt_q;
           self.options.x_freespacing = opt_x;
         }
@@ -957,7 +1116,6 @@ impl<'a> Parser<'a> {
         self.parse_alternations(group);
       }
 
-      // todo: Yeah, this doesn't look right.
       if c != ')' {
         if self.c() == ')' {
           self.idx += 1;
@@ -1011,8 +1169,8 @@ impl<'a> Parser<'a> {
         self.idx += 1;
       }
 
-      c = self.cr();
-      let quote_start_loc: Index32 = self.idx;
+      let quote_start_loc: Index32 = self.cr().0 as Index32;
+      c = self.c();
 
       /*
       A bit convoluted, the following just checks for an closing quote matching the kind used to
@@ -1029,20 +1187,18 @@ impl<'a> Parser<'a> {
         let mut p: Position = Position(0);
         loop {
           if double_quotes &&
-          (c == self.options.escape_character) &&
-          (self.at(self.idx + 1) == '"')
+             (c == self.options.escape_character) &&
+             (self.at(self.idx + 1) == '"')
           {
             self.idx += 1;
           }
 
           if p != Position(position::NPOS) {
-            self.follow_positions_map
-                .get_mut(p.idx().into())
-                .insert(self.idx.into());
+            let idx = self.idx;
+            self.follow_positions(p.idx()).insert(idx.into());
           }
 
-          p = self.idx.into();
-          self.idx += 1;
+          p = Position(self.ci().0 as u64);
           c = self.c();
 
           if !(
@@ -1082,7 +1238,8 @@ impl<'a> Parser<'a> {
     }
     else if c.is_whitespace() && self.options.x_freespacing {
       self.idx += 1;
-    } else if c == ')' {
+    }
+    else if c == ')' {
       RegexError::MismatchedParens(self.idx).emit();
       //self.idx += 1;
     }
@@ -1102,6 +1259,12 @@ impl<'a> Parser<'a> {
     } else if self.is_first_group && c != '\0' { // permits empty regex pattern but not empty subpatterns
       RegexError::EmptyExpression(self.idx).emit()
     }
+
+
+    println!("group.first_positions = ");
+    group.debug_log_position_set(TargetSet::First, 0);
+    println!("group.last_positions = ");
+    group.debug_log_position_set(TargetSet::Last, 0);
     println!("END parse_sequence() <parse4>");
   }
 
@@ -1115,134 +1278,134 @@ impl<'a> Parser<'a> {
     // Increment past the `'\'`
     let mut c: Char = self.cr();
 
-    if c == '0' {
-      // `\0177` 	matches an 8-bit character with octal value `177`.
-      // (Use `\177` in lexer specifications instead.)
-      // Note: The code below requires exactly three octal digits after the initial zero.
-      c = Char(0);
+    match char::from(c) {
 
-      let mut d: u16 = 0;
-      for _i in 0..3{
-        if !(c.0 < 32 && d >= b'0' as u16 && d <= b'7' as u16){
-          break;
+      '0' => {
+        // `\0177` 	matches an 8-bit character with octal value `177`.
+        // (Use `\177` in lexer specifications instead.)
+        c = Char(0);
+
+        let mut d: Char = self.cr();
+        for _i in 0..3 {
+          if !(c.0 < 32 && d >= '0' && d <= '7') {
+            break;
+          }
+          c = Char((c.0 << 3) + d.0 - b'0' as u16);
+          d = self.cr();
         }
-        self.idx += 1;
-        d = self.c().0;
-        c = Char((c.0 << 3) + d - b'0' as u16);
+
       }
 
-      self.idx += 1;
+      | 'x'
+      | 'u' => {
+        // `\x7f` 	  matches an 8-bit character with hexadecimal value `7f`
+        // `\x{7f}` 	matches an 8-bit character with hexadecimal value `7f`
+        self.idx += 1;
+        c = Char(0);
 
-    }
-    else if c == 'x' || c == 'u' {
-      // `\x7f` 	  matches an 8-bit character with hexadecimal value `7f`
-      // `\x{7f}` 	matches an 8-bit character with hexadecimal value `7f`
-      self.idx += 1;
-      c = Char(0);
+        let skip_curley = match self.c() == '{' {
+          true => {
+            if self.at(self.idx + 3) != '}' {
+              RegexError::InvalidEscape(self.idx).emit();
+            }
+            self.idx += 1;
+            1
+          }
 
-      let skip_curley = match self.c() == '{'{
+          false => 0
+        };
+        /*
+        // Parse two hex digits, placing the value into `c`.
+        if !self.c().is_hexdigit() || !self.at(self.idx + 1).is_hexdigit() {
+          RegexError::InvalidEscape(self.idx).emit();
+        }
+        */
+        for _i in 0..2 {
+          if self.c().is_hexdigit() { break; }
+          let d: u16 = self.c().0;
+          c = Char(
+            c.0 << 4 + match d > b'9' as u16 {
+              true => (d | 0x20) - (b'a' as u16 - 10),
 
-        true  => {
-          if self.at(self.idx + 3) != '}' {
+              false => d - b'0' as u16
+            }
+          );
+          self.idx += 1;
+        }
+
+        self.idx += skip_curley;
+      }
+
+      'c' => {
+        // `\cX`: control character `X` mod 32
+        c = Char(self.cr().0 % 32);
+        self.idx += 1;
+      }
+
+      'e' => {
+        // Escape character
+        c = Char(0x1B); // 0x1b == 27 == <ESC>
+        self.idx += 1;
+      }
+
+      'N' => {
+        // Complement of newline
+        if let Some(chars) = &mut maybe_chars {
+          chars.insert_pair(Char(0), Char(9));
+          chars.insert_pair(Char(11), Char(255));
+        }
+        self.idx += 1;
+        c = Meta::EndOfLine.into();
+      }
+
+      | 'p'
+      | 'P' if self.at(self.idx + 1) == '{' => {
+        // `\p{alnum}`: Posix character class.
+        self.idx += 2;
+        if let Some(chars) = &mut maybe_chars {
+          **chars |= *self.parse_char_class();
+          //c = self.c();
+
+          if c == 'P' {
+            chars.flip();
+          }
+          // Curly must be closed.
+          if self.c() == '}' {
+            self.idx += 1;
+          } else {
             RegexError::InvalidEscape(self.idx).emit();
           }
-          self.idx += 1;
-          1
-        }
-
-        false => 0
-
-      };
-
-      // Parse exactly two hex digits, placing the value into `c`.
-      if !self.c().is_hexdigit() || !self.at(self.idx+1).is_hexdigit(){
-        RegexError::InvalidEscape(self.idx).emit();
-      }
-
-      for _i in 0..2 {
-        let d: u16 = self.c().0;
-        c = Char(
-          c.0 << 4 + match d > b'9' as u16 {
-
-            true => (d | 0x20) - (b'a' as u16 - 10),
-
-            false => d - b'0' as u16
-
+        } else {
+          c = self.cr();
+          while c != '\0' && c != '}' {
+            c = self.cr();
           }
-        );
+          if c == '}' {
+            self.idx += 1;
+          } else {
+            RegexError::InvalidEscape(self.idx).emit();
+          }
+        }
+        c = Meta::EndOfLine.into();
+      }
+
+      _t if _t != '_' => {
+        // If it's an escape character, convert to the ASCII character it refers to.
+        if let Some(new_c) = Char::try_from_escape(c) {
+          c = new_c;
+        } else {
+          if let Some(_) = chars::add_posix_class(c, &maybe_chars) {
+            c = Meta::EndOfLine.into();
+          }
+        }
         self.idx += 1;
       }
 
-      self.idx += skip_curley;
-
-    }
-    else if c == 'c' {
-      // `\cX`: control character `X` mod 32
-      self.idx += 1;
-      c = Char(self.c().0 % 32);
-      self.idx += 1;
-    }
-    else if c == 'e' {
-      // Escape character
-      c = Char(0x1B); // 0x1b == 27 == <ESC>
-      self.idx += 1;
-    }
-    else if c == 'N' {
-      // Complement of newline
-      if let Some(chars) = &mut maybe_chars {
-        chars.insert_pair(Char(0), Char(9));
-        chars.insert_pair(Char(11), Char(255));
+      _ => {
+        // Must be that `c == '_'`
       }
-      self.idx += 1;
-      c = Meta::EndOfLine.into();
     }
-    else if (c == 'p' || c == 'P') && self.at(self.idx + 1) == '{' {
-      // `\p{alnum}`: Posix character class.
-      self.idx += 2;
-      if let Some(chars) = &mut maybe_chars {
 
-        **chars |= *self.parse_char_class();
-        //c = self.c();
-
-        if c == 'P' {
-          chars.flip();
-        }
-        // Curley must be closed.
-        if self.c() == '}' {
-          self.idx += 1;
-        } else {
-          RegexError::InvalidEscape(self.idx).emit();
-        }
-      }
-      else {
-        self.idx += 1;
-        c = self.c();
-        while c != '\0' && c != '}' {
-          self.idx += 1;
-          c = self.c();
-        }
-        if c == '}' {
-          self.idx += 1;
-        } else {
-          RegexError::InvalidEscape(self.idx).emit();
-        }
-      }
-      c = Meta::EndOfLine.into();
-    }
-    else if c != '_' {
-
-      // If it's an escape character, convert to the ASCII character it refers to.
-      if let Some(new_c) = Char::try_from_escape(c) {
-        c = new_c;
-      }
-      else {
-        if let Some(_) = chars::add_posix_class(c, &maybe_chars) {
-          c = Meta::EndOfLine.into();
-        }
-      }
-
-      self.idx += 1;
-    }
 
     if let Some(chars) = maybe_chars {
       // We signal to not insert `c` by setting it to an arbitrary `Meta` variant.
@@ -1275,12 +1438,724 @@ impl<'a> Parser<'a> {
   }
 
 
-  fn debug_log_position_set(&self, positions: &PositionSet, indent_level: usize) {
-    //println!("{} = {{", target_set);
-    print!("{}{}", " ".repeat(indent_level*2),
-      positions.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", ")
-    );
+  // endregion
+
+  // region Compiler Methods
+
+
+  fn compile(&mut self)
+  {
+    println!("BEGIN compile()");
+    // init stats and timers
+    self.vertex_count = 0;
+    self.edge_count = 0;
+    self.edges_time = Duration::default();
+
+    // Timing
+    let timer = Clock::new();
+    let vertex_start_time = timer.start();
+    let mut edge_start_time;
+
+    // construct the DFA
+    self.subpattern_is_accepting.resize(self.subpattern_endpoints.len(), false);
+
+    self.start.deref().borrow_mut().trim_lazy();
+
+    // Hash table with 64K entries (u16 indexed)
+    let mut table: HashMap<VcPositionSet, VcState> = HashMap::new();
+    /*
+    See https://swtch.com/~rsc/regexp/regexp1.html.
+    The table takes a list of states and produces the DFA state to which it corresponds or
+    creates a new DFA state associated to the list if needed.
+
+    */
+
+    // start state should only be discoverable (to possibly cycle back to) if no tree DFA was constructed
+    { // Scope of `start_ref`
+      let start_rc = self.start.clone();
+      let start_ref = start_rc.borrow_mut();
+      //if start_ref.tnode.is_none() {
+      table.entry(start_ref.positions.clone()).insert(self.start.clone());
+      //}
+    }
+
+    // Previous added state in the state.next.next.next... chain.
+    let mut last_state: VcState = self.start.clone();
+    for state in StateNextIterator::new(self.start.clone()) {
+      // Set the timer.
+      edge_start_time = timer.start();
+
+      // use the tree DFA accept state, if present
+      /*
+      if let Some(root_node) = &state.borrow_mut().tnode {
+        // todo: Is this branchless version equivalent to the commented code? I.e. is
+        //  state.accept always 0?
+        let accept_value = max(root_node.borrow().accept, 0);
+        state.borrow_mut().accept = accept_value;
+        // if root_node.accept > 0 {
+        //   state.accept = root_node.accept;
+        // }
+      }
+      */
+
+      self.compile_transition(state.clone());
+
+      /*
+      if let Some(root_node) = &state.borrow().tnode {
+        let root_ref = root_node.borrow();
+        // merge tree DFA transitions into the final DFA transitions to target states
+        if moves.is_empty() {
+          // no DFA transitions: the final DFA transitions are the tree DFA transitions to target states
+          for c in Chars::from(CharClass::ASCII) &
+          Chars::from(root_ref.edge.keys().copied().collect::<Vec<u8>>())
+          {
+            let new_state =  self.add_edge(state.clone(), c);
+            last_state.borrow_mut().next = Some(new_state.clone());
+            last_state = new_state;
+          }
+        }
+        else {
+          // let mut moves = self.moves.borrow_mut();
+          // combine the tree DFA transitions with the regex DFA transition moves
+          let mut chars: Chars =
+          Chars::from(CharClass::ASCII) &
+          Chars::from(root_ref.edge.keys().copied().collect::<Vec<u8>>());
+          if self.options.insensitive_case {
+            // Also add the uppercase versions of all lower case letters in `root_ref.edge`.
+            chars.make_case_insensitive();
+          }
+
+          let mut move_indices_to_remove: Vec<usize> = Vec::new();
+          for (i, (ref mut move_chars, move_positions))
+          in moves.iter_mut().enumerate()
+          {
+            if chars.intersects(move_chars) {
+
+              // tree DFA transitions intersect with self DFA transition move
+              let common: Chars = chars & *move_chars;
+              chars -= common;
+              *move_chars -= common;
+              if move_chars.is_empty() {
+                move_indices_to_remove.push(i);
+              }
+
+              for c in common{
+                let new_state = self.add_edge(state.clone(), c);
+                last_state.borrow_mut().next = Some(new_state.clone());
+                last_state = new_state.clone();
+                new_state.borrow_mut().positions = move_positions.clone();
+              }
+            }
+          }
+          // todo: Make this more efficient. See https://stackoverflow.com/a/63294593/4492422.
+          //       Edit - actually, `swap_remove` or `retain` are better.
+          { // scope of moves
+            // let mut moves = self.moves.borrow_mut();
+            for i in move_indices_to_remove.iter().rev(){
+              moves.remove(*i);
+            }
+          }
+          if self.options.insensitive_case {
+            // Normalize by removing upper case if option i (case insensitive matching) is enabled
+            chars -= CharClass::Upper.into();
+          }
+
+          for c in chars {
+            let new_state =  self.add_edge(state.clone(), c);
+            last_state.borrow_mut().next = Some(new_state.clone());
+            last_state = new_state;
+          }
+
+        }
+      }
+      */
+
+      self.edges_time += timer.delta(edge_start_time, timer.end());
+
+      for (ref mut position, positions_set) in self.moves.iter_mut()
+      {
+        // (position, positions_set): (Chars, Positions)
+        if !ValueCell::borrow(positions_set).is_empty() {
+          let entry = table.entry(positions_set.clone());
+          let target_state: &mut VcState =
+            match entry {
+              Entry::Occupied(entry) => entry.into_mut(),
+              Entry::Vacant(entry)   =>
+                entry.insert(State::with_pos(positions_set.clone()))
+            };
+          last_state.borrow_mut().next = Some(target_state.clone());
+          last_state                   = target_state.clone();
+          // RJ: Connect every NFA state in the DFA state to the target_state.
+          // todo: What does this do that is different from `Chars::hi()`/`Chars::lo()`?
+          let mut lo : Char = position.lo();
+          let max    : Char = position.hi();
+          while lo <= max {
+            if position.contains(lo) {
+              let mut hi: Char = lo + 1u16;
+              while hi <= max && position.contains(hi) {
+                hi += 1;
+              }
+              hi -= 1;
+              // Now hi is one less than the smallest Char not contained in position, or max+1 if
+              // position contains them all. Note this is not the same as the largest Char in
+              // `position` if the chars are not contiguous.
+
+              #[cfg(feature = "REVERSE_ORDER_EDGE_COMPACT")] //if REVERSE_ORDER_EDGE_COMPACT == -1
+              { state.borrow_mut().edges.insert(lo, (hi, target_state.clone())); }
+              #[cfg(not(feature = "REVERSE_ORDER_EDGE_COMPACT"))]
+              { state.borrow_mut().edges.insert(hi, (lo, target_state.clone())); }
+
+              self.edge_count += (hi.0 - lo.0 + 1) as usize;
+              lo = hi + 1;
+            }
+            lo += 1;
+          }
+        }
+      }
+
+      let accept_value = state.borrow_mut().accept;
+      if accept_value > 0 && accept_value as usize <= self.subpattern_endpoints.len() {
+        self.subpattern_is_accepting[(accept_value - 1) as usize] = true;
+      }
+
+      self.moves.clear();
+      self.vertex_count += 1;
+    }
+
+    self.vertices_time += timer.delta(vertex_start_time, timer.end())  - self.edges_time;
+    println!("END compile()");
+    println!("\nVertices: {}\nEdges:{}", self.vertex_count, self.edge_count);
+    println!("Vertices time: {}μs", self.vertices_time.as_micros());
+    println!("Edges time: {}μs\n", self.edges_time.as_micros());
   }
+
+
+
+
+  fn compile_transition(&mut self, state: VcState)
+  {
+    println!("BEGIN compile_transition()");
+    { // Scope of references below.
+      let mut state_ref = state.borrow_mut();
+      let positions_rc = state_ref.positions.clone();
+      let positions_ref = positions_rc.borrow_mut();
+      for k in positions_ref.iter() {
+        if k.is_accept() {
+
+          // pick lowest nonzero accept index
+          if state_ref.accept == 0 || k.accepts() < state_ref.accept {
+            state_ref.accept = k.accepts();
+          }
+
+          // RJ Question: But couldn't we have set state.accept = 0 in previous if?
+          // Answer: No, because we are in k.is_accept() branch.
+          if k.accepts() == 0 {
+            // Redo if first position is accepting.
+            state_ref.redo = true;
+          }
+
+        }
+        else {
+          let mut c : Char = self.at(k.idx());
+
+          let literal: bool = self.modifiers.is_set(k.idx(), Mode::q);
+
+          if (c == '(' || c == ')') && !literal {
+            let mut n: Lookahead16 = 0;
+            if c == '(' {
+              println!("LOOKAHEAD HEAD");
+            } else {
+              println!("LOOKAHEAD TAIL");
+            }
+
+            { // Scope of lookahead_map
+              //let lookahead_map_rc = self.lookahead_map.clone();
+              //let lookahead_map = lookahead_map_rc.borrow_mut();
+              for (hops, (position, locations)) in self.lookahead_map.iter().enumerate()
+              {
+                //if let Some(range) = locations.contains(k.idx()) {
+                if locations.contains(&k.idx()) {
+                  println!("{} {} ({}) {}", state.borrow().accept, position, true, n);
+
+                  // todo: What is the distance from locations.begin() to range? Is it the index of
+                  // range?
+                  //std::distance(locations.begin(), range);
+                  let l: Lookahead16 = n.checked_add(hops as u16).unwrap_or_else(
+                    |   | {
+                      RegexError::ExceedsLimits(k.idx()).emit();
+                    }
+                  );
+
+                  if c == '(' {
+                    state_ref.heads.insert(l);
+                  } else {
+                    state_ref.tails.insert(l);
+                  }
+                } else {
+                  println!("{} {} ({}) {}", state.borrow().accept, position, false, n);
+                }
+
+                // start and end positions of the regex
+                let m: Lookahead16 = n;
+                n += locations.len() as u16;
+                // check for overflow
+                if n < m {
+                  RegexError::ExceedsLimits(k.idx().into()).emit();
+                }
+              } // end iterate over lookahead_map
+            } // end scope lookahead_map
+          } // end if c is parens
+          else {
+            if self.follow_positions_map.contains_key(&Position(k.idx().into()))
+            {
+
+              // If` k.idx()` already maps to something and `k.is_lazy()`, make sure `k` also maps to
+              // something. If it doesn't, make it out of lazifying `follow_positions_map[k.idx()]`.
+              // Finally, set `follow` to `follow_positions_map[k]`. If `!k.is_lazy()`, just set
+              // `follow` to `follow_positions_map[k.idx()]`
+
+              let follow: VcPositionSet = // The big if statement
+              if k.is_lazy() {
+                // # if 1 // CHECKED algorithmic options: 7/31 self optimization works fine when trim_lazy adds non-lazy greedy state, but may increase the total number of states:
+                if k.is_greedy() {
+                  continue;
+                }
+
+
+                if !self.follow_positions_map.contains_key(k) {
+                  // self.follow_positions is not defined for lazy pos yet, so add lazy self.follow_positions (memoization)
+                  let follow_rc = self.follow_positions_map[Position(k.idx().into())].clone();
+
+                  let mut more_positions: PositionSet =
+                    follow_rc.borrow().iter().map(
+                      | p | match p.is_ticked() {
+                        true  => *p,
+                        false => p.set_lazy(k.lazy())
+                      }
+                    ).collect();
+
+                  self.follow_positions(*k).append(&mut more_positions);
+                }
+
+
+
+
+                #[cfg(feature = "DEBUG")]
+                {
+                  println!("lazy self.follow_positions(");
+                  print!("{}", k);
+                  print!(" ) = {{");
+                  debug_log_position_set(&*self.follow_positions_map[k].borrow(), 0);
+                  println!(" }}");
+                }
+
+                self.follow_positions_map[k].clone()
+              } // end if k.lazy()
+              else {
+                self.follow_positions_map[Position(k.idx().into())].clone()
+              };
+
+
+              let mut chars: Chars = Chars::new();
+              if literal {
+                if c.is_alphabetic() && self.modifiers.is_set(k.idx(), Mode::i) {
+                  chars.insert(c.to_uppercase());
+                  chars.insert(c.to_lowercase());
+                } else {
+                  chars.insert(c);
+                }
+              }
+              else {
+                match char::from(c) {
+                  '.' => {
+                    // todo: These constants are ridiculous. Replace with
+                    //       `Chars::new().insert('whatever')`
+                    let dot_all_characters =
+                      match self.modifiers.is_set(k.idx(), Mode::s) {
+                        true  => ALL_CHARS,         // DotAll Mode - `.` matches newlines
+                        false => NON_NEWLINE_CHARS, // Excludes
+                      };
+                    chars |= dot_all_characters;
+                  }
+
+                  '^' => {
+                    match self.modifiers.is_set(k.idx(), Mode::m) {
+                      true => {
+                        chars.insert(Char::from(Meta::BeginningOfLine));
+                      }
+                      false => {
+                        chars.insert(Char::from(Meta::BeginningOfBuffer));
+                      }
+                    }
+                  }
+
+                  '$' => {
+                    match self.modifiers.is_set(k.idx(), Mode::m) {
+                      true => {
+                        chars.insert(Char::from(Meta::EndOfLine));
+                      }
+                      false => {
+                        chars.insert(Char::from(Meta::EndOfBuffer));
+                      }
+                    }
+                  }
+
+                  _ => {
+                    if c == '[' {
+                      self.idx = k.idx();
+                      self.compile_list(&mut chars);
+                    }
+                    else {
+                      match char::from(self.escape_at(k.idx()).unwrap()) {
+                        '0' => { // no escape at current k.idx()
+                          if c.is_alphabetic() && self.modifiers.is_set(k.idx(), Mode::i) {
+                            chars.insert(c);
+                            chars.insert(c.toggle_case());
+                          } else {
+                            chars.insert(c);
+                          }
+                        }
+
+                        'i' => {
+                          chars.insert(Char::from(Meta::IndentBoundary));
+                        }
+
+                        'j' => {
+                          chars.insert(Char::from(Meta::DedentBoundary));
+                        }
+
+                        'k' => {
+                          chars.insert(Char::from(Meta::UndentBoundary));
+                        }
+
+                        'A' => {
+                          chars.insert(Char::from(Meta::BeginningOfBuffer));
+                        }
+
+                        'z' => {
+                          chars.insert(Char::from(Meta::EndOfBuffer));
+                        }
+
+                        'B' => {
+                          match k.is_anchor() {
+                            true => {
+                              chars.insert(Char::from(Meta::NonWordBoundary));
+                            }
+                            false => {
+                              chars.insert(Char::from(Meta::NonWordEnd));
+                            }
+                          }
+                        }
+
+                        'b' => {
+                          match k.is_anchor() {
+                            true => {
+                              chars.insert_pair(Char::from(Meta::BeginWordBegin), Char::from(Meta::EndWordBegin));
+                            }
+
+                            false => {
+                              chars.insert_pair(Char::from(Meta::BeginWordEnd), Char::from(Meta::EndWordEnd));
+                            }
+                          }
+                        }
+
+                        '<' => {
+                          match k.is_anchor() {
+                            true => {
+                              chars.insert(Char::from(Meta::BeginWordBegin));
+                            }
+                            false => {
+                              chars.insert(Char::from(Meta::BeginWordEnd));
+                            }
+                          }
+                        }
+
+                        '>' => {
+                          match k.is_anchor() {
+                            true => {
+                              chars.insert(Char::from(Meta::EndWordBegin));
+                            }
+                            false => {
+                              chars.insert(Char::from(Meta::EndWordEnd));
+                            }
+                          }
+                        }
+
+                        _ => {
+                          c = self.parse_esc(Some(&mut chars));
+                          // todo: What if 'c' is uppercase?
+                          if !c.is_meta()         &&
+                              u8::from(c) <= b'z' &&
+                              c.is_alphabetic()   &&
+                              self.modifiers.is_set(k.idx(), Mode::i)
+                          {
+                            chars.insert(c.to_uppercase());
+                            chars.insert(c.to_lowercase());
+                          }
+                        }
+                      } // end match escape_at
+                    } // end c != '['
+                  } // end match branch _
+                } // end match char::from(c)
+              } // end if not literal
+              self.transition(&mut chars, follow);
+            } // end if i != self.follow_positions.end()
+          } // end else c is not parens
+        } // end else k is not accept
+      } // end for k in positions
+    } // end scope of references
+
+    let mut indices_to_remove: Vec<usize> = Vec::new();
+    for (index, (_, positions)) in self.moves.iter().enumerate() {
+      trim_lazy(&mut *positions.borrow_mut());
+      if positions.borrow().is_empty() {
+        indices_to_remove.push(index)
+      }
+    }
+    // todo: make more efficient.
+    for index in indices_to_remove.iter().rev(){
+      self.moves.remove(*index);
+    }
+
+    println!("END compile_transition()");
+  }
+
+
+
+  /// Compiles things of the form `[abc]`.
+  fn compile_list(&mut self, chars: &mut Chars) {
+    // Don't modify `self.idx`.
+    let mut idx = self.idx + 1;
+
+    let complement: bool = self.at(idx) == '^';
+    if complement {
+      idx += 1;
+    }
+
+    // We use `prev` as a cursor pointing to the last character of interest.
+    let mut prev : Char = Meta::BeginningOfLine.into();
+    // `lo` is the bottom of a character range.
+    let mut lo   : Char = Meta::EndOfLine.into();
+    let mut c    : Char = self.at(idx);
+
+    // for (Char c = at(loc); c != '\0' && (c != ']' || prev == Meta::BeginningOfLine); c = at( + + loc)) {
+    loop {
+      if !(c != '\0' && (c != ']' || prev == Meta::BeginningOfLine)) {
+        break;
+      }
+
+
+      if c == '-' && !prev.is_meta() && lo.is_meta() {
+        // Found the bottom end of a character range. (Notice this cannot happen on the first
+        // character, because `prev.is_meta()` at the first character.)
+        lo = prev;
+      }
+      else {
+        //    [:aunum:]
+        //    01234
+        //    c
+        // Check for posix character class expression, e.g. `[:alnum:]`
+        // Look for *last* `:` first. Note loc+2 would be beyond first `:`.
+
+        if c == '[' && self.at(idx + 1) == ':'{
+          let maybe_c_loc = self.find_at(idx + 2, ':');
+          if let Some(c_loc) = maybe_c_loc {
+            /*
+              There are two forms:
+                1. `[:c:]`, which is treated as `\c`
+                2. `[:alnum:]`, where "alnum" stands for any name of a Posix class.
+            */
+            if self.at(c_loc + 1) == ']' {
+              // Check if of the form `[:c:]`. If so, treat it as `\c`.
+              if c_loc == idx + 3 {
+                // Point `idx` to first `:` for `parse_esc()` without throwing away the old value.
+                std::mem::swap(&mut idx, &mut self.idx);
+                self.idx += 1;
+                c = self.parse_esc(Some(chars));
+                // Restore `idx`
+                std::mem::swap(&mut idx, &mut self.idx);
+              }
+              else {
+                // Must be of the form `[:alnum:]`. Identify which class name is used.
+                // Point `self.idx` to first character after `:` for `parse_esc()` without throwing
+                // away the old value.
+                std::mem::swap(&mut idx, &mut self.idx);
+                self.idx += 2;
+
+                *chars |= *self.parse_char_class();
+
+                // Restore `self.idx`
+                std::mem::swap(&mut idx, &mut self.idx);
+
+                c = Meta::EndOfLine; // Arbitrary `Meta` variant
+              }
+            }
+            idx = c_loc + 1; // Now points to `]`
+          }
+        }
+        else if c == self.options.escape_character && !self.options.bracket_escapes {
+          // An escape character with escapes in brackets enabled.
+          // [\x....]
+          //  c
+          //  l
+          // Point `self.idx` to first `:` for `parse_esc()` without throwing away the old value.
+          std::mem::swap(&mut idx, &mut self.idx);
+          c = self.parse_esc(Some(chars));
+          // Restore `self.idx`
+          std::mem::swap(&mut idx, &mut self.idx);
+          // loc now points to one past the escape char.
+          // [\x....]
+          //   cl
+        }
+
+        // We signaled that we only found a character above by setting `c` to an arbitrary `Meta`
+        // character.
+        if !c.is_meta() {
+          if !lo.is_meta() {
+            // We already had the lower character of a character range, so `c` is the upper
+            // character.
+            if lo <= c {
+              chars.insert_pair(lo, c);
+            } else {
+              RegexError::InvalidClassRange(self.idx).emit();
+            }
+
+            if self.modifiers.is_set(idx, Mode::i) {
+              chars.make_case_insensitive();
+            }
+            // Reset search for upper character; `lo` is reset unconditionally in the outermost
+            // `else`.
+            c = Char::from(Meta::EndOfLine);
+          }
+          else {
+            if c.is_alphabetic() && self.modifiers.is_set(idx, Mode::i) {
+              chars.insert(c.to_uppercase());
+              chars.insert(c.to_lowercase());
+            } else {
+              chars.insert(c);
+            }
+          }
+        }
+
+        prev = c;
+        lo = Char::from(Meta::EndOfLine);
+      }
+
+      idx += 1;
+      c = self.at(idx);
+    }
+
+    // If `-` is the last character in brackets, treat it as a literal.
+    if !lo.is_meta() {
+      chars.insert(Char::from('-'));
+    }
+
+    if complement {
+      chars.flip();
+    }
+  }
+
+
+
+  fn transition(&mut self, chars: &mut Chars, follow: VcPositionSet)
+  {
+    /*
+      We have: the characters that label an edge ending in a position in the follow set.
+
+      1. First, we find all existing transitions (moves) that are subsets of this transition, and we
+         absorb them into this transition, removing them from the set of moves.
+      2. Then we find any existing transitions that are super-transitions of this transition, and
+         we combine this transition with whatever we find.
+    */
+
+    { // scope of `indices_to_remove`
+      let mut indices_to_remove: Vec<usize> = Vec::new();
+      for (index, (i_chars, i_positions)) in self.moves.iter().enumerate() {
+        // Combine existing subtransitions with this transition.
+        if i_positions.borrow().is_subset(&follow.borrow()) {
+          *chars += *i_chars;
+          indices_to_remove.push(index);
+        }
+      }
+      for index in indices_to_remove.iter().rev(){
+        self.moves.remove(*index);
+      }
+    }
+
+    { // scope of more_moves
+      let mut more_moves: Vec<Move> = Vec::new();
+      for (i_chars, i_positions) in self.moves.iter_mut() {
+        if chars.intersects(i_chars) {
+          // Combine this transition with any existing super-transitions.
+          let follow_ref = follow.borrow_mut();
+          if ValueCell::borrow(i_positions).is_subset(&follow_ref) {
+            *chars -= *i_chars;
+          }
+          else {
+            // follow is not a subset of positions
+            let mut positions: RefMut<PositionSet> = i_positions.deref().borrow_mut();
+            if chars.is_subset(i_chars) {
+              *chars -= *i_chars;
+              positions.extend(&*follow_ref);
+
+            } else {
+              // Make a copy of `i`, empty original `i`.
+              let (mut new_chars, mut new_positions): (Chars, BTreeSet<Position>) =
+                  (i_chars.clone(), i_positions.deref().borrow().clone());
+              new_positions.extend(follow_ref.iter());
+              *chars -= new_chars;
+              i_chars.clear();
+              more_moves.push((new_chars, ValueCell::new(new_positions)));
+            }
+          }
+          if chars.is_empty() {
+            return;
+          }
+        }
+      }
+      self.moves.append(&mut more_moves);
+    }
+    if !chars.is_empty() {
+      self.moves.push((*chars, follow.clone()));
+    }
+  }
+
+/*
+
+
+  /**
+    Creates an edge labeled `c` from `state` to a newly created state, returning the new state.
+
+    This method exists to accommodate the prefix tree optimization.
+  */
+  fn add_edge(&mut self, state: VcState, c: Char) -> VcState {
+    let mut state_ref = state.borrow_mut();
+    let target_state: VcState =
+    State::with_node(
+      state_ref.tnode.clone().unwrap().borrow_mut().edge[&c.into()].clone()
+    );
+
+    if self.options.insensitive_case && c.is_alphabetic() {
+      let c_lower: Char = c.to_lowercase();
+      let c_upper: Char = c.to_uppercase();
+
+      state_ref.edges.insert(c_lower, (c_lower, target_state.clone()));
+      state_ref.edges.insert(c_upper, (c_upper, target_state.clone()));
+
+      self.edge_count += 2;
+    }
+    else {
+      state_ref.edges.insert(c, (c, target_state.clone()));
+      self.edge_count += 1;
+    }
+
+    target_state
+  }
+
+*/
+
+
+  // endregion
 
 
   fn debug_log_follow_map(&self, indent_level: usize) {
@@ -1288,11 +2163,9 @@ impl<'a> Parser<'a> {
     for (position, positions_set) in self.follow_positions_map.iter() {
       print!("{}{}{} ) = {{", " ".repeat(indent_level*2), "follow_positions_map(", position);
 
-      self.debug_log_position_set(positions_set, indent_level);
+      debug_log_position_set(&*ValueCell::borrow(positions_set), indent_level);
       println!(" }}");
     }
-
-
 
   }
 
@@ -1301,8 +2174,107 @@ impl<'a> Parser<'a> {
 }
 
 
+
+// region Free functions
+
+pub(crate) fn trim_lazy(positions: &mut PositionSet) {
+
+  #[cfg(feature = "DEBUG")]
+  {
+    println!("BEGIN trim_lazy({{");
+    debug_log_position_set(&positions, 0);
+    println!(" }})");
+  }
+
+  // todo: This loop block feels wrong. Determine what it does and potentially rewrite.
+  /*
+    The original C++ code makes no sense. For example:
+
+    ```C++
+      1592:   pos->erase(--p.base());
+    ```
+    Since the element `p` pointed to is now erased, `p` is invalidated.
+  */
+  /*
+      let mut p_iter_fwd = &mut positions_ref.iter();
+      let mut p_iter_rev = p_iter_fwd.clone().rev(); //Positions::reverse_iterator = pos.rbegin();
+      loop {
+        let maybe_p = p_iter_rev.next();
+        let mut p = match maybe_p {
+          Some(q) if q.lazy_tag()!=0 => q,
+          _ => {
+            break;
+          }
+        };
+        let lazy_p = p.lazy_tag();
+
+        if p.is_accept() || p.is_anchor() { // CHECKED algorithmic options: 7/28 added p.anchor() {
+          positions_ref.insert(p.lazy(0)); // make lazy accept/anchor a non-lazy accept/anchor
+
+          positions_ref.remove(p_iter_fwd.next().unwrap());
+          loop {
+            p = match p_iter_rev.next() {
+              Some(q) if !q.is_accept() && q.lazy_tag() == lazy_p => q,
+              _ => {
+                break;
+              }
+            };
+            // # if 0 // CHECKED algorithmic options: set to 1 to turn lazy trimming off
+            // p += 1;
+            // # else
+            positions_ref.remove(p_iter_fwd.next().unwrap());
+            // # endif
+          }
+        }
+        else {
+          // # if 0 // CHECKED algorithmic options: 7/31
+          // if (p.greedy()) {
+          //   pos.insert(p.lazy(0).greedy(false));
+          //   pos.erase(--p.base());
+          // } else {
+          //   break; // ++p;
+          // }
+          // # else
+          if !p.is_greedy() { // stop here, greedy bit is 0 from here on
+            break;
+          }
+          positions_ref.insert(p.lazy(0));
+          positions_ref.remove(p_iter_fwd.next().unwrap()); // CHECKED 10/21 ++p;
+          // # endif
+        }
+
+
+      // # if 0 // CHECKED algorithmic options: 7/31 but results in more states
+      // while (p != pos.rend() & & p.greedy()) {
+      // pos.insert(p.greedy(false));
+      // pos.erase( - - p.base());
+      // }
+      // # endif
+
+      // trims accept positions keeping the first only, and keeping redo (positions with accept == 0)
+      let mut first_not_found: bool = true;
+      for q in positions_ref.iter() {
+        if q.is_accept() && q.accepts() != 0 {
+          if first_not_found {
+            // Keep the first accept state only.
+            first_not_found = false;
+          } else {
+            // Erase all other accept states after the first one.
+            positions_ref.remove(q);
+          }
+        }
+      }
+      */
+  #[cfg(feature = "DEBUG")] {
+    println!("END trim_lazy({{");
+    debug_log_position_set(&positions, 0);
+    println!(" }})");
+  }
+}
+
+
 /// Makes everything in positions greedy.
-// todo: make this a method on `Positions`. Requires makes `Positions` a struct.
+// todo: make this a method on `Positions`. Requires making `Positions` a struct.
 pub fn greedify(positions: &PositionSet) -> PositionSet{
 
   let mut new_positions: PositionSet = PositionSet::new();
@@ -1323,10 +2295,16 @@ pub fn greedify(positions: &PositionSet) -> PositionSet{
 }
 
 
+pub fn debug_log_position_set(positions: &PositionSet, indent_level: usize) {
+  //println!("{} = {{", target_set);
+  print!("{}{}", " ".repeat(indent_level*2),
+         positions.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", ")
+  );
+}
 
 
 
-
+// endregion
 
 
 

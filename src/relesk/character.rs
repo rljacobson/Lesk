@@ -18,11 +18,11 @@
 
 use std::fmt::{Formatter, Display};
 use std::ops::{Add, Sub, AddAssign, SubAssign};
+use std::cmp::Ordering;
 use std::iter::Step;
 
 
 use super::*;
-use std::cmp::Ordering;
 
 // region Constants
 
@@ -77,7 +77,7 @@ pub fn meta_char_as_str(c: Char) -> &'static str {
 
 // endregion
 
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Default)]
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Default, Hash)]
 pub struct Char(pub u16);
 
 
@@ -193,7 +193,6 @@ impl Char{
 
 
   pub fn is_meta(&self) -> bool {
-    // todo: Shouldn't this be >=?
     *self > Meta::MIN
   }
 
@@ -222,7 +221,6 @@ impl Char{
   pub(crate) fn to_printable(&self) -> String {
     let c: u8 = Into::<u8>::into(*self);
 
-    // todo: Should we handle meta characters?
     // todo: Why are the cases here different from `escape_char()`?
     if c >= b'\x07' && c <= b'\r' {
       // '\x07' is '\a'

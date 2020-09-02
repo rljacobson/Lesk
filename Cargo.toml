@@ -13,13 +13,14 @@ DEBUG = []
 [dependencies]
 #relesk          = {path = "/Users/rjacobson/Development/Lesk/relesk"}
 #ranges         = {path = "/Users/rjacobson/Development/ranges", features=["use_std"]}
-ranges = "0.3.0"
-quanta = "0.6.2" # Timing compilation, etc.
+ranges        = "0.3.0"
+quanta        = "0.6.2" # Timing compilation, etc.
 patricia_tree = "0.2.0" # String literal tries
-defaultmap = "0.4.0"
+defaultmap    = {path = "/Users/rljacobson/Development/defaultmap"}
+appendlist    = "1.4.0" # Fast append-only list, no reallocations
 
+#atomic-option = "0.1.2" # atomic, nullable, owned pointers
 #lazy_static    = "1.4.0"
-#appendlist     = "1.4.0" # Fast append-only list, no reallocations
 #macro-attr     = {git = "https://github.com/DanielKeep/rust-custom-derive.git"}
 #newtype_derive = {git = "https://github.com/DanielKeep/rust-custom-derive.git"}
 #strum          = "0.19"  # String <--> Enum conversions
