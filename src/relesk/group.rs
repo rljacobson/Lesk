@@ -2,7 +2,7 @@
 
 /*!
 
-  A `Group` represents a *thing that can match*^[1] in relesk. They are used during parsing and
+  A `Group` represents a *top-level alternation*^[1] in relesk. They are used during parsing and
   generating the DFA (by the `Parser`) but are not used for matching. Their primary function is to
   own information about each position within the regex that lie within the group.
 
@@ -49,17 +49,17 @@ pub struct Group{
 
   /// Index of the ancestral top-level group of this group
   pub idx              : GroupIndex32,
-  pub first_positions  : PositionSet, //< Positions at which the first matches can occur.
-  pub last_positions   : PositionSet, //< Positions at which the group match can end
+  pub first_positions  : PositionSet, //< Positions at which a group match may begin.
+  pub last_positions   : PositionSet, //< Positions which can immediately follow a match.
 
   pub subpattern_endpoints: Vec<Index32>, //< Subpatterns' ending '|' or '\0'
 
   /// Created with the group, incremented in `parse_iterated()`
   pub lazy_index          : Lazy8,        //< ??
 
-  /// Positions that are set as lazy. These are ultimately encoded into `Position`s (in the
+  /// Group indices that are set as lazy. These are ultimately encoded into `Position`s (in the
   /// top-most byte) when control flow returns to the `parse()` function.
-  pub lazy_set            : PositionSet,  //< Positions that are set as lazy
+  pub lazy_set            : HashSet<Lazy8>,
   pub nullable            : bool,         //< Can this group match the empty string?
   pub iteration           : Iteration16,  //< Which iteration of a repeated subpattern is it
   pub min_pattern_length  : u8,           //< Patterns after the prefix are also bound above by 8.
@@ -193,7 +193,7 @@ impl Group {
     match target{
       TargetSet::First => &self.first_positions, // Parens for linter.
       TargetSet::Last => &self.last_positions,
-      TargetSet::Lazy => &self.lazy_set,
+      //TargetSet::Lazy => &self.lazy_set,
       //TargetSet::Follow => self.follow_set,          // Parser member
       //TargetSet::Start => panic!("Not a valid target."),
       _t => panic!("Not a valid target: {}", _t),
@@ -205,7 +205,7 @@ impl Group {
     match target{
       TargetSet::First => &mut self.first_positions,
       TargetSet::Last => &mut self.last_positions,
-      TargetSet::Lazy => &mut self.lazy_set,
+      //TargetSet::Lazy => &mut self.lazy_set,
       //TargetSet::Follow => self.follow_set,          // Parser member
       //TargetSet::Start => panic!("Not a valid target."),
       _ => panic!("Not a valid target."),
@@ -218,7 +218,7 @@ impl Group {
     self.lazy_index = self.lazy_index
                             .checked_add(1)
                             .unwrap_or_else(| | {
-                              // overflow: too many top-level alternations (should never happen)
+                              // overflow: exceeds max 255 lazy quantifiers
                               RegexError::ExceedsLimits(self.idx).emit();
                             });
   }
@@ -229,10 +229,10 @@ impl Group {
   pub fn debug_log_position_set(&self, target_set: TargetSet, indent_level: usize){
     let target = self.from_target(target_set);
 
-    println!("{} = {{", target_set);
+    print!("group<{}>.{} = {{", self.idx, target_set);
     for p in target.iter() {
-      print!("{}", " ".repeat(indent_level*2)); // The `*2` means use two spaces.
-      println!("{}", *p);
+      //print!("{}", " ".repeat(indent_level*2)); // The `*2` means use two spaces.
+      print!("  {}", *p);
     }
     println!("}}")
   }

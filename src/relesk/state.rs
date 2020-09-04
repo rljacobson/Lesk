@@ -38,7 +38,7 @@ pub struct State {
                                ///  subpattern
   pub heads     : LookaheadSet,  //< lookahead head set
   pub tails     : LookaheadSet,  //< lookahead tail set
-  pub redo      : bool         //< true if this is an ignorable final state
+  pub redo      : bool           //< true if this is an ignorable final state
 }
 
 impl State {

@@ -32,7 +32,6 @@ use crate::valuecell::ValueCell;
 
 use super::*;
 use std::collections::BTreeSet;
-use core::num::dec2flt::parse::ParseResult::Valid;
 
 static END_ESCAPE_OPTION : &[u8; 39] = b"0123456789<>ABDHLNPSUWXbcdehijklpsuwxz\0";
 static META_OPS          : &[u8;  9] = b".^$([{?*+";
@@ -52,7 +51,7 @@ pub struct Parser<'a> {
 
 
   // Shared?
-  pub lazy_set : HashSet<Lazy8>, //< Positions in the regex that are lazily matched.
+  pub lazy_set : HashSet<Lazy8>, //< Group indices in the regex that are lazily matched.
 
   /// For each position in the group, which positions can follow it.
   pub follow_positions_map : FollowMap,
@@ -161,16 +160,10 @@ impl<'a> Default for Parser<'a> {
 impl<'a> Parser<'a> {
 
   pub fn new<'p>(regex: &'p str, options_string: &'p str) -> Parser<'p>{
-    let mut parser: Parser = Parser{
-      next_group_idx: 1,
-      ..Parser::default()
-    };
+    let mut parser: Parser = Parser::default();
     parser.options.parse_options(options_string);
-
     parser.regex = regex.as_bytes();
-
     parser.build();
-
     parser
   }
 
@@ -213,7 +206,7 @@ impl<'a> Parser<'a> {
       // We do not return `Option<Char>` to keep unwrapping to reasonable levels.
       return '\0'.into();
     }
-    println!("self.at({}) == {}", idx, self.regex[idx as usize] as char);
+    //println!("self.at({}) == {}", idx, self.regex[idx as usize] as char);
     Char::from(self.regex[idx as usize])
   }
 
@@ -301,8 +294,8 @@ impl<'a> Parser<'a> {
   #[must_use]
   pub fn is_reachable(&self, choice: GroupIndex32) -> bool {
     return choice >= 1 &&
-    choice <= self.subpattern_endpoints.len() as GroupIndex32 &&
-    self.subpattern_is_accepting[choice as usize - 1];
+           choice <= self.subpattern_endpoints.len() as GroupIndex32 &&
+           self.subpattern_is_accepting[choice as usize - 1];
   }
 
 
@@ -349,6 +342,7 @@ impl<'a> Parser<'a> {
 
     // Parse each subpattern.
     loop {
+      self.group.borrow_mut().idx = self.next_group_index();
 
       // We first look for a string literal pattern.
       let mut end: Index32 = self.idx;
@@ -456,17 +450,18 @@ impl<'a> Parser<'a> {
 
     self.parse_time = timer.delta(parse_start_time, timer.end());
 
+    self.subpattern_endpoints = self.group.borrow().subpattern_endpoints.clone();
+
     #[cfg(feature = "DEBUG")]
     {
       print!("start_positions = {{");
-      debug_log_position_set(&self.group.borrow().first_positions, 0);
+      debug_log_position_set(&self.start_positions, 0);
       println!("}}");
-      print!("follow_positions = {{");
-      debug_log_position_set(&self.group.borrow().last_positions, 0);
-      println!("}}");
-      print!("lazy_set = {{");
-      debug_log_position_set(&self.group.borrow().lazy_set, 0);
-      println!("}}");
+      //print!("follow_positions = {{");
+      //debug_log_position_set(&self._positions, 0);
+      //println!("}}");
+      //println!("lazy_set = {{ {:?} }}", &self.group.borrow().lazy_set);
+      //println!("subpattern_endpoints = {:?}", self.subpattern_endpoints);
 
 
       self.debug_log_follow_map(0);
@@ -672,16 +667,17 @@ impl<'a> Parser<'a> {
         */
       }
 
+      if group.nullable {
+        group.extend_with(TargetSet::First, &new_group.first_positions);
+      }
 
       for p in group.last_positions.iter() {
         self.follow_positions(p.idx()).extend(new_group.first_positions.iter());
       }
 
-      if group.nullable {
-
-        group.extend_with(TargetSet::First, &new_group.first_positions);
+      if new_group.nullable {
         group.extend_with(TargetSet::Last, &new_group.last_positions);
-        group.extend_with(TargetSet::Lazy, &new_group.lazy_set); // CHECKED 10/21
+        group.lazy_set.extend(&new_group.lazy_set); // CHECKED 10/21
       }
       else {
         std::mem::swap(&mut group.last_positions, &mut new_group.last_positions);
@@ -689,7 +685,7 @@ impl<'a> Parser<'a> {
         group.nullable = false;
       }
 
-      // CHECKED 10/21 set_insert(self.lazy_set, lazyset1);
+      // CHECKED 10/21 set_insert(group.lazy_set, lazyset1);
       group.iteration = max(new_group.iteration, group.iteration);
       c = self.c();
     }
@@ -699,8 +695,8 @@ impl<'a> Parser<'a> {
       for k in group.last_positions.iter() {
 
         if self.at(k.idx()) == ')'
-          // todo: Can group.idx be trusted to give the right `lookahead` set?
-          && self.lookahead_map[group.idx].contains(&k.idx())
+           // todo: Can group.idx be trusted to give the right `lookahead` set?
+           && self.lookahead_map[group.idx].contains(&k.idx())
         {
           self.follow_positions(p.idx()).insert(*k);
         }
@@ -719,9 +715,7 @@ impl<'a> Parser<'a> {
       }
     }
 
-    println!("group.first_positions = ");
     group.debug_log_position_set(TargetSet::First, 0);
-    println!("group.last_positions = ");
     group.debug_log_position_set(TargetSet::Last, 0);
     println!("END parse_anchors()");
   }
@@ -769,17 +763,17 @@ impl<'a> Parser<'a> {
 
           group.increment_lazy_index();
 
-          self.lazy_set.insert(group.lazy_index); // overflow: exceeds max 255 lazy quantifiers
+          group.lazy_set.insert(group.lazy_index);
           if group.nullable {
             group.lazify_own_set(TargetSet::First);
           }
           self.idx += 1;
         } else {
           // CHECKED algorithmic options: 7/30 if !group.nullable {
-          // CHECKED algorithmic options: 7/30   self.lazy_set.clear();
+          // CHECKED algorithmic options: 7/30   group.lazy_set.clear();
           group.first_positions = greedify(&group.first_positions);
         }
-        if c == '+' && !group.nullable && !self.lazy_set.is_empty() {
+        if c == '+' && !group.nullable && !group.lazy_set.is_empty() {
           let more_first_positions: PositionSet = group.lazify(&group.first_positions);
           for p in group.last_positions.iter() {
             self.follow_positions(p.idx()).extend(more_first_positions.iter());
@@ -828,7 +822,7 @@ impl<'a> Parser<'a> {
           if self.cr() == '?' {
             group.increment_lazy_index();
 
-            self.lazy_set.insert(group.lazy_index);
+            group.lazy_set.insert(group.lazy_index);
 
             if group.nullable {
               group.lazify_own_set(TargetSet::First);
@@ -843,8 +837,8 @@ impl<'a> Parser<'a> {
             self.idx += 1;
           } else {
             // CHECKED algorithmic options 7/30 if !group.nullable {
-            // CHECKED algorithmic options 7/30   self.lazy_set.clear();
-            if n < m && self.lazy_set.is_empty() {
+            // CHECKED algorithmic options 7/30   group.lazy_set.clear();
+            if n < m && group.lazy_set.is_empty() {
               group.greedify_own_set(TargetSet::First);
             }
           }
@@ -1261,9 +1255,7 @@ impl<'a> Parser<'a> {
     }
 
 
-    println!("group.first_positions = ");
     group.debug_log_position_set(TargetSet::First, 0);
-    println!("group.last_positions = ");
     group.debug_log_position_set(TargetSet::Last, 0);
     println!("END parse_sequence() <parse4>");
   }
@@ -2100,7 +2092,7 @@ impl<'a> Parser<'a> {
 
             } else {
               // Make a copy of `i`, empty original `i`.
-              let (mut new_chars, mut new_positions): (Chars, BTreeSet<Position>) =
+              let (new_chars, mut new_positions): (Chars, BTreeSet<Position>) =
                   (i_chars.clone(), i_positions.deref().borrow().clone());
               new_positions.extend(follow_ref.iter());
               *chars -= new_chars;

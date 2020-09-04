@@ -207,7 +207,7 @@ impl Position {
 
 
   pub fn is_lazy(&self) -> bool {
-    return (self.0 >> LAZY_SL) != 0;
+    return (self.0 & LAZY) != 0;
   }
 
 
