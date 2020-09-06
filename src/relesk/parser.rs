@@ -108,63 +108,7 @@ pub struct Parser<'a> {
   //< ms elapsed DFA edges construction time
   pub code_words_time: Duration, //< ms elapsed code words assembly time
 }
-/*
-impl<'a> Default for Parser<'a> {
-  fn default() -> Self {
-    Parser{
 
-      // Parser //
-
-      options        : Default::default(),
-      modifiers      : Default::default(),
-      regex          : &[],
-      idx            : 0,
-     //tree_dfa            : Tree::new(),
-      group          : Default::default(),
-      next_group_idx : 0,
-      is_first_group : false,
-
-      lazy_set             : Default::default(),
-      follow_positions_map : Default::default(),
-      start_positions      : Default::default(),
-      lookahead_map        : Default::default(),
-
-
-      // Compiler //
-
-      vertex_count   : 0,
-      edge_count     : 0,
-      opcode_count   : 0,
-      opcode_table   : Vec::new(),
-      start          : VcState::default(),
-      moves          : MoveVec::new(),
-      prefix         : Vec::new(),
-      one_pre_string : false,
-
-      min_pattern_length      : 0,  //< patterns after the prefix are also bound above by 8.
-      subpattern_endpoints    : Vec::new(),
-      subpattern_is_accepting : Vec::new(),
-
-      // Match Predictor Tables
-      prediction_bitmap_array: Vec::new(),
-      predict_match_hashes   : [0; limits::HASH_MAX_IDX as usize], //< predict-match hash array
-      predict_match_array    : [0; limits::HASH_MAX_IDX as usize],
-
-
-
-      // Benchmark/Diagnostic data. //
-
-      parse_time      : Default::default(),
-      vertices_time   : Duration::default(), //< ms elapsed DFA vertices construction time
-      edges_time      : Duration::default(), //< ms elapsed DFA edges construction time
-      code_words_time : Duration::default(), //< ms elapsed code words assembly time
-
-    }
-
-
-  }
-}
-*/
 impl<'a> Parser<'a> {
   pub fn new<'p>(regex: &'p str, options_string: &'p str) -> Parser<'p> {
     let mut parser: Parser = Parser::default();
@@ -262,11 +206,11 @@ impl<'a> Parser<'a> {
   }
 
   #[must_use]
-  pub fn escape_at(&self, loc: Index32) -> Option<Char> {
+  pub fn escape_at(&self, loc: Index32) -> char {
     if self.at(loc) == self.options.escape_character {
-      return Some(self.at(loc + 1));
+      return char::from(self.at(loc + 1));
     }
-    None
+    '\0'
   }
 
   #[must_use]
@@ -1189,7 +1133,7 @@ impl<'a> Parser<'a> {
 
       self.idx += 1;
     }
-    else if (c == '"' && self.options.quote_with_x) || self.escape_at(self.idx) == Some('Q'.into()) {
+    else if (c == '"' && self.options.quote_with_x) || self.escape_at(self.idx) == 'Q' {
       let double_quotes: bool = c == '"';
 
       if !double_quotes {
@@ -1468,9 +1412,9 @@ impl<'a> Parser<'a> {
   // region Compiler Methods
 
 
-  fn compile(&mut self)
-  {
+  fn compile(&mut self) {
     println!("BEGIN compile()");
+
     // init stats and timers
     self.vertex_count = 0;
     self.edge_count = 0;
@@ -1481,24 +1425,33 @@ impl<'a> Parser<'a> {
     let vertex_start_time = timer.start();
     let mut edge_start_time;
 
-    // construct the DFA
+    // Construct the DFA
     self.subpattern_is_accepting.resize(self.subpattern_endpoints.len(), false);
 
+    // todo: Isn't start guaranteed to be empty at this point?
     self.start.deref().borrow_mut().trim_lazy();
 
-    // Hash table with 64K entries (u16 indexed)
-    let mut table: HashMap<VcPositionSet, VcState> = HashMap::new();
     /*
     See https://swtch.com/~rsc/regexp/regexp1.html.
     The table takes a list of states and produces the DFA state to which it corresponds or
     creates a new DFA state associated to the list if needed.
-
     */
+    let mut table: HashMap<VcPositionSet, VcState> = HashMap::new();
 
-    // start state should only be discoverable (to possibly cycle back to) if no tree DFA was constructed
     { // Scope of `start_ref`
       let start_rc = self.start.clone();
       let start_ref = start_rc.borrow_mut();
+
+      // To setup for compilation, `self.start_positions` becomes the `PositionSet` for `self.start`.
+      //let start_positions: VcPositionSet = self.start.borrow().positions.clone();
+      std::mem::swap(&mut *start_ref.positions.borrow_mut(), &mut self.start_positions);
+      println!("Compiling {} start positions and {} subpattern_endpoints.",
+               start_ref.positions.borrow().len(),
+               self.subpattern_endpoints.len()
+      );
+
+      // Start state should only be discoverable (to possibly cycle back to) if no string tree DFA
+      // was constructed
       //if start_ref.tnode.is_none() {
       table.entry(start_ref.positions.clone()).insert(self.start.clone());
       //}
@@ -1510,7 +1463,7 @@ impl<'a> Parser<'a> {
       // Set the timer.
       edge_start_time = timer.start();
 
-      // use the tree DFA accept state, if present
+      // Use the string tree DFA accept state, if present
       /*
       if let Some(root_node) = &state.borrow_mut().tnode {
         // todo: Is this branchless version equivalent to the commented code? I.e. is
@@ -1655,9 +1608,9 @@ impl<'a> Parser<'a> {
   }
 
 
-  fn compile_transition(&mut self, state: VcState)
-  {
+  fn compile_transition(&mut self, state: VcState) {
     println!("BEGIN compile_transition()");
+
     { // Scope of references below.
       let mut state_ref = state.borrow_mut();
       let positions_rc = state_ref.positions.clone();
@@ -1737,7 +1690,8 @@ impl<'a> Parser<'a> {
 
               let follow: VcPositionSet = // The big if statement
               if k.is_lazy() {
-                // # if 1 // CHECKED algorithmic options: 7/31 self optimization works fine when trim_lazy adds non-lazy greedy state, but may increase the total number of states:
+                // # if 1 // CHECKED algorithmic options: 7/31 self optimization works fine when
+                // trim_lazy adds non-lazy greedy state, but may increase the total number of states:
                 if k.is_greedy() {
                   continue;
                 }
@@ -1824,7 +1778,7 @@ impl<'a> Parser<'a> {
                       self.idx = k.idx();
                       self.compile_list(&mut chars);
                     } else {
-                      match char::from(self.escape_at(k.idx()).unwrap()) {
+                      match self.escape_at(k.idx()) {
                         '0' => { // no escape at current k.idx()
                           if c.is_alphabetic() && self.modifiers.is_set(k.idx(), Mode::i) {
                             chars.insert(c);
@@ -2184,7 +2138,7 @@ impl<'a> Parser<'a> {
 pub(crate) fn trim_lazy(positions: &mut PositionSet) {
   #[cfg(feature = "DEBUG")]
   {
-    println!("BEGIN trim_lazy({{");
+    print!("BEGIN trim_lazy({{ ");
     debug_log_position_set(&positions, 0);
     println!(" }})");
   }
@@ -2269,7 +2223,7 @@ pub(crate) fn trim_lazy(positions: &mut PositionSet) {
       }
       */
   #[cfg(feature = "DEBUG")] {
-    println!("END trim_lazy({{");
+    print!("END trim_lazy({{");
     debug_log_position_set(&positions, 0);
     println!(" }})");
   }

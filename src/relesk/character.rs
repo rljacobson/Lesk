@@ -169,10 +169,19 @@ impl Char{
   }
 
   pub fn is_printable(&self) -> bool {
-    const CTRL_MAX: u16 = 0x1f;
+    //const CTRL_MAX: u8 = 0x1f;
+    //
+    //if self.is_meta(){
+    //  return false;
+    //}
+    //
+    //let byte = (self.0 as u8);
+    //
+    //byte == b'\t' || byte == b'\n' ||
+    //(byte == b'\0' || (byte != b'\0' && byte <= CTRL_MAX))
 
-    self == '\t' || self == '\n' ||
-    !(self == '\0' || (self != '\0' && self.0 <= CTRL_MAX))
+    (self.0 as u8).wrapping_sub(b' ') < 0x5F
+
   }
 
   /**

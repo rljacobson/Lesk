@@ -43,8 +43,6 @@ use opcode::{
   opcode_tail
 };
 
-use defaultmap::DefaultHashMap;
-
 use crate::valuecell::ValueCell;
 
 use options::Options;
@@ -53,7 +51,7 @@ use opcode::OPCODE_REDO;
 
 
 
-type PredictMap = DefaultHashMap<u16, PredictBits8>;
+type PredictMap = Vec<PredictBits8>;
 
 static CODE_EXTENSIONS   : [&str; 4] = [".h", ".hpp", ".cpp", ".cc"];
 static DFA_EXTENSIONS    : [&str; 1] = [".gv"];
@@ -75,7 +73,7 @@ pub struct Compiler<'a, 'b> {
 
 
   // Match Predictor Tables
-  prediction_bitmap_array: PredictMap, //< bitmap array
+  predict_bitmap_array: PredictMap, //< bitmap array
   predict_match_hashes   : PredictMap,
   //predict_match_hashes   : [PredictBits8; limits::HASH_MAX_IDX as usize], //< predict-match hash array
   predict_match_array    : PredictMap, //< predict-match array
@@ -99,9 +97,9 @@ impl<'a, 'b> Default for Compiler<'a, 'b> {
       min_pattern_length : 0,
 
       // Match Predictor Tables
-      prediction_bitmap_array: DefaultHashMap::new(0xFF),
-      predict_match_hashes   : DefaultHashMap::new(0xFF), //< predict-match hash array
-      predict_match_array    : DefaultHashMap::new(0xFF),
+      predict_bitmap_array   : Vec::from([0xFF; 256]),
+      predict_match_hashes   : Vec::from([0xFF; 256]), //< predict-match hash array
+      predict_match_array    : Vec::from([0xFF; 256]),
 
       opcodes_time: Duration::default()
     }
@@ -211,57 +209,23 @@ impl<'a, 'b> Compiler<'a, 'b> {
       #[cfg(feature = "DEBUG")]
       {
         let arrays = [
-          (&self.prediction_bitmap_array, "prediction_bitmap_array"),
+          (&self.predict_bitmap_array, "prediction_bitmap_array"),
           (&self.predict_match_hashes,    "predict_match_hashes"),
-          (&self.predict_match_array,     "predict_match_array"),
+          (&self.predict_match_array,      "predict_match_array"),
         ];
 
         for (array, name) in arrays.iter() {
-          for (key, value) in array.iter() {
-            if Char::from(*value).is_printable() {
-              println!("{}['{}'] = {:02x}", name, key, value);
-            }
-            else {
-              println!("{}[{:3}] = {:02x}", name, key, value);
-            }
-          }
-        }
-
-        /*
-        for i in 0..self.prediction_bitmap_array.len() {
-          if self.prediction_bitmap_array[i] != 0xFF {
-            // I think we want Char::from(self.prediction_bitmap_array[i]), not `Char::from(i)`.
-            // Tentatively changed
-            //if (Char::from(i)).is_printable() {
-            if (Char::from(self.prediction_bitmap_array[i])).is_printable() {
-                println!("bit['{}'] = {:02x}", i, self.prediction_bitmap_array[i]);
-            }
-            else {
-              println!("bit[{:3}] = {:02x}", i, self.prediction_bitmap_array[i]);
+          for (key, value) in array.iter().enumerate() {
+            if *value != 0xFF {
+              let char_key = Char::from(key);
+              if Char::from(key).is_printable() {
+                println!("{}['{}'] = 0x{:02x}", name, char_key, value);
+              } else {
+                println!("{}[{:3}] = 0x{:02x}", name, key, value);
+              }
             }
           }
         }
-        for i in 0..limits::HASH_MAX_IDX {
-          if self.predict_match_hashes[i] != 0xFF {
-            if Char::from(self.predict_match_hashes[i]).is_printable() {
-              println!("predict_match_array['{}'] = {:02x}", i, self.predict_match_hashes[i]);
-            }
-            else {
-              println!("predict_match_array[{:3}] = {:02x}", i, self.predict_match_hashes[i]);
-            }
-          }
-        }
-        for i in 0..limits::HASH_MAX_IDX {
-          if self.predict_match_array[i] != 0xFF {
-            if Char::from(self.predict_match_array[i]).is_printable() {
-              println!("predict_match_array['{}'] = {:02x}", i, self.predict_match_array[i]);
-            }
-            else {
-              println!("predict_match_array[{:3}] = {:02x}", i, self.predict_match_array[i]);
-            }
-          }
-        }
-        */
 
       }
     }
@@ -272,16 +236,18 @@ impl<'a, 'b> Compiler<'a, 'b> {
 
 
   fn gen_predict_match(&mut self, state: VcState) {
+    println!("BEGIN gen_predict_match()");
+
     const LEVEL_COUNT: usize = 8;
     self.min_pattern_length = LEVEL_COUNT as u8;
-    let states_maps: [RefCell<DefaultHashMap<VcState, Ranges<Hash16>>>; LEVEL_COUNT] = {
+    let states_maps: [RefCell<HashMap<VcState, Ranges<Hash16>>>; LEVEL_COUNT] = {
       // Rust Black Magic
       // From: https://doc.rust-lang.org/nightly/nomicon/unchecked-uninit.html
 
       // Create an uninitialized array of `MaybeUninit`. The `assume_init` is
       // safe because the type we are claiming to have initialized here is a
       // bunch of `MaybeUninit`s, which do not require initialization.
-      type CrazyType = MaybeUninit< RefCell<DefaultHashMap<VcState, Ranges<Hash16>>> >;
+      type CrazyType = MaybeUninit< RefCell<HashMap<VcState, Ranges<Hash16>>> >;
       let mut x: [CrazyType; LEVEL_COUNT] = unsafe {
         MaybeUninit::uninit().assume_init()
       };
@@ -290,12 +256,12 @@ impl<'a, 'b> Compiler<'a, 'b> {
       // assignment instead of `ptr::write` does not cause the old
       // uninitialized value to be dropped.
       for i in 0..LEVEL_COUNT {
-        x[i] = MaybeUninit::new( RefCell::new(DefaultHashMap::default()) );
+        x[i] = MaybeUninit::new( RefCell::new(HashMap::default()) );
       }
 
       // Everything is initialized. Transmute the array to the
       // initialized type.
-      unsafe { std::mem::transmute::<_, [RefCell<DefaultHashMap<VcState, Ranges<Hash16>>>; LEVEL_COUNT]>(x) }
+      unsafe { std::mem::transmute::<_, [RefCell<HashMap<VcState, Ranges<Hash16>>>; LEVEL_COUNT]>(x) }
     };
 
 
@@ -307,9 +273,7 @@ impl<'a, 'b> Compiler<'a, 'b> {
       &mut *states_maps[0].borrow_mut()
     );
     for level in 1..LEVEL_COUNT {
-      for (state, ranges) in
-      states_maps[level - 1].borrow().iter() {
-
+      for (state, ranges) in states_maps[level - 1].borrow().iter() {
         self.gen_predict_match_transitions(
           level as u8,
           state.clone(),
@@ -328,10 +292,11 @@ impl<'a, 'b> Compiler<'a, 'b> {
     let constant = 1u8.checked_shl(self.min_pattern_length as u32)
                       .unwrap_or(0)
                       .wrapping_sub(1);
-    self.prediction_bitmap_array.set_default(constant);
-    for value in self.prediction_bitmap_array.values_mut(){
-      *value &= constant;
+    for i in 0..256{
+      self.predict_bitmap_array[i] &= constant;
     }
+
+    println!("END gen_predict_match()");
   }
 
 
@@ -347,9 +312,11 @@ impl<'a, 'b> Compiler<'a, 'b> {
     level: u8,
     state: VcState,
     maybe_labels: Option<&Ranges<Hash16>>,
-    states: &mut DefaultHashMap<VcState, Ranges<Hash16> >
+    states: &mut HashMap<VcState, Ranges<Hash16> >
   )
   {
+    println!("BEGIN gen_predict_match_transitions()");
+
     let mut state_ref: RefMut<State> = state.borrow_mut();
 
 
@@ -400,15 +367,15 @@ impl<'a, 'b> Compiler<'a, 'b> {
       // When `level == 0`, the predict arrays are indexed by `lo.0` instead of the hash of `lo`
       // and `i_char1`, so we specialize for the `level == 0` case.
       if level == 0 {
-        for c in lo.0..=hi.0 {
-          self.prediction_bitmap_array[c] &= !1;
+        for c in lo.0 as usize ..= hi.0 as usize {
+          self.predict_bitmap_array[c] &= !1;
           self.predict_match_hashes[c] &= !1;
           if accept {
             self.predict_match_array[c] &= !(1 << 7);
           }
           self.predict_match_array[c] &= !(1 << 6);
           if !next.is_null() {
-            states.get_mut(i_state.clone()).insert(Char(c).hashed());
+            states.entry(i_state.clone()).or_default().insert(Char::from(c).hashed());
           }
         }
         // The remainder of the loop only applies for level > 0.
@@ -421,15 +388,15 @@ impl<'a, 'b> Compiler<'a, 'b> {
       if level < 4 || level <= self.min_pattern_length {
 
         if level <= self.min_pattern_length {
-          for i in lo..=*hi {
-            self.prediction_bitmap_array[i.0] &= !(1 << level);
+          for i in lo.0 as usize ..= hi.0 as usize {
+            self.predict_bitmap_array[i] &= !(1 << level);
           }
         }
 
         for label_range in labels.as_slice().iter() {
           for label_lo in *label_range {
             for c in lo..=*hi {
-              let h:Hash16  = hash_byte(label_lo, c.into());
+              let h: usize  = hash_byte(label_lo, c.into()) as usize;
 
               self.predict_match_hashes[h] &= !(1 << level);
 
@@ -441,8 +408,9 @@ impl<'a, 'b> Compiler<'a, 'b> {
               }
 
               if !next.is_null() {
-                states.get_mut(i_state.clone())
-                      .insert(Char(h).hashed());
+                states.entry(i_state.clone())
+                      .or_default()
+                      .insert(Char::from(h).hashed());
               }
 
             } // end iter over chars in range
@@ -450,6 +418,8 @@ impl<'a, 'b> Compiler<'a, 'b> {
         } // end iter over ranges
       } // end if < level 4 || < min_pattern_length
     } // end iter over edges
+
+    println!("END gen_predict_match_transitions()");
   }
 
 
@@ -820,7 +790,7 @@ impl<'a, 'b> Compiler<'a, 'b> {
     // Used locally below.
     fn write_array(array: &PredictMap, write_out: &mut Box<dyn FnMut(&[u8])
     >) {
-      for (index, value) in array.iter() {
+      for (index, value) in array.iter().enumerate() {
         write_out(
           format!("{}{:3},",
                   match index & 0xF {
@@ -843,7 +813,7 @@ impl<'a, 'b> Compiler<'a, 'b> {
     write_out(",".as_bytes());
 
     if self.min_pattern_length > 1 && self.prefix.len() == 0 {
-      write_array(&self.prediction_bitmap_array, write_out);
+      write_array(&self.predict_bitmap_array, write_out);
     }
 
     if self.min_pattern_length >= 4 {
@@ -1284,13 +1254,13 @@ impl<'a, 'b> Compiler<'a, 'b> {
             loop {
               // branchless version:
               peek_next_char_into_c1   =   lo == Meta::EndOfBuffer  ||
-              lo == Meta::EndOfLine;
+                                           lo == Meta::EndOfLine;
               keep_previous_char_in_c0 = !peek_next_char_into_c1    &&
                                           (lo == Meta::EndWordEnd   ||
                                            lo == Meta::BeginWordEnd ||
                                            lo == Meta::NonWordEnd);
               peek_next_char_into_c1   = peek_next_char_into_c1     ||
-              keep_previous_char_in_c0;
+                                         keep_previous_char_in_c0;
 
               check_dfa_closure(
                 i_state.clone(),
@@ -1619,14 +1589,12 @@ pub fn valid_lookahead_index(index: Index32) -> bool {
 
 /**
 
-The inverse of `Char::hashed()`. The input `h` and output are `usize` only because it is used as
+The inverse of `Char::hashed()`. The output is `usize` only because it is used as
 an index into an array more that it is used as a `Hash16`.
 
 */
-pub fn hash_byte(h: Hash16, b: u8) -> Hash16 {
-  // `h` is a `usize`
-  // data.
-  return (((h as Hash16) << 3) ^ b as Hash16) & (limits::HASH_MAX_IDX as Hash16 - 1);
+pub fn hash_byte(h: Hash16, b: u8) -> usize {
+  return ((h << 3) ^ b as Hash16) as usize & (limits::HASH_MAX_IDX - 1);
 }
 
 
