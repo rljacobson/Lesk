@@ -209,7 +209,7 @@ impl Group {
 
 
   // region Debug Logging
-  pub fn debug_log_position_set(&self, target_set: TargetSet, indent_level: usize){
+  pub fn debug_log_position_set(&self, target_set: TargetSet, _indent_level: usize){
     let target = self.from_target(target_set);
 
     print!("group<{}>.{} = {{", self.idx, target_set);

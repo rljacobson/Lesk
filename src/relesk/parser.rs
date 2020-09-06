@@ -183,7 +183,7 @@ impl<'a> Parser<'a> {
     // start state = start_positions = first_position of the self.follow_positions_map NFA, also
     // merge the tree DFA root when non-std::ptr::null()=
     self.start = VcState::new(State::default());
-    // Compile the NFA into a DFA
+    // Compile the NFA
     self.compile();
 
 
@@ -194,24 +194,19 @@ impl<'a> Parser<'a> {
       self.prefix.clone(),
       &self.options
     );
+    // Compilers DFA from NFA
     compiler.assemble();
   }
 
   // region Inlined Methods
 
   #[must_use]
-  fn follow_positions<I>(&mut self, index: I, source_file: &str, source_line: u32)
+  fn follow_positions<I>(&mut self, index: I, _source_file: &str, _source_line: u32)
     -> RefMut<PositionSet>
     where I: Into<Position>
   {
-    /*
-    if !self.follow_positions_map.contains_key(&p){
-      self.follow_positions_map.insert(p, VcPositionSet::new(PositionSet::new()));
-    }
-    VcPositionSet::borrow_mut(self.follow_positions_map.get_mut(&p).unwrap())
-    */
     let p: Position = index.into();
-    println!("{}:{}: follow_positions_map[{}]", source_file, source_line, &p);
+    //println!("{}:{}: follow_positions_map[{}]", source_file, source_line, &p);
     self.follow_positions_map.entry(p).or_default().borrow_mut()
   }
 
@@ -477,6 +472,7 @@ impl<'a> Parser<'a> {
                ).collect::<Vec<String>>().join(", ")
       );
     }
+
     println!("END parse()");
     println!("Parse time: {}μs", self.parse_time.as_micros());
   }
@@ -492,7 +488,6 @@ impl<'a> Parser<'a> {
 
     if self.c() == '(' && self.at(1) == '?' {
       self.idx = 2;
-      print!("(?");
 
       // Compute the ending location of the option expression.
       while self.c().is_alphanumeric() || self.c() == '-' {
@@ -505,7 +500,6 @@ impl<'a> Parser<'a> {
 
         let mut c: char = self.c().into();
         while c != ')' {
-          print!("{}", c);
           match c {
             '-' => {
               active = false;
@@ -531,7 +525,6 @@ impl<'a> Parser<'a> {
           }
           c = self.cr().into();
         }
-        println!(")");
         // Skip the ')'
         self.idx += 1;
       } // end if c == ')'
@@ -554,7 +547,7 @@ impl<'a> Parser<'a> {
   elements into the global vars. parse_regex3 calls regex_parse4, also clears first, last, and lazy.
   */
   fn parse_alternations(&mut self, group: &mut Group) {
-    println!("BEGIN parse_alternations({})", self.idx);
+    //println!("BEGIN parse_alternations({})", self.idx);
 
     // Called with provided group
     self.parse_anchors(group);
@@ -578,9 +571,9 @@ impl<'a> Parser<'a> {
     }
 
 
-    group.debug_log_position_set(TargetSet::First, 0);
-    group.debug_log_position_set(TargetSet::Last, 0);
-    println!("END parse_alternations");
+    //group.debug_log_position_set(TargetSet::First, 0);
+    //group.debug_log_position_set(TargetSet::Last, 0);
+    //println!("END parse_alternations");
   }
 
 
@@ -589,7 +582,7 @@ impl<'a> Parser<'a> {
   Parses anchored groups
   */
   fn parse_anchors(&mut self, group: &mut Group) {
-    println!("BEGIN parse_anchors({}) <parse2>", self.idx);
+    //println!("BEGIN parse_anchors({}) <parse2>", self.idx);
 
     let mut anchor_positions: PositionSet = PositionSet::default();
     if group.is_first_group {
@@ -684,7 +677,7 @@ impl<'a> Parser<'a> {
       for p in group.last_positions.iter() {
         self.follow_positions(p.index_with_iter(), file!(), line!())
             .extend(new_group.first_positions.iter());
-        debug_display_appending(&new_group.first_positions);
+        //debug_display_appending(&new_group.first_positions);
       }
 
       if new_group.nullable {
@@ -727,11 +720,13 @@ impl<'a> Parser<'a> {
       }
     }
 
+    /*
     group.debug_log_position_set(TargetSet::First, 0);
     group.debug_log_position_set(TargetSet::Last, 0);
     self.debug_log_follow_map(0);
 
     println!("END parse_anchors()");
+    */
   }
 
 
@@ -740,7 +735,7 @@ impl<'a> Parser<'a> {
   Parses repeated/optional subexpressions: `*`, `+`, `?`
   */
   fn parse_iterated(&mut self, group: &mut Group) {
-    println!("BEGIN parse_iterated({}) <parse3>", self.idx);
+    //println!("BEGIN parse_iterated({}) <parse3>", self.idx);
 
     let original_position: Position = Position(self.idx.into());
 
@@ -791,18 +786,18 @@ impl<'a> Parser<'a> {
             self.follow_positions(p.index_with_iter(), file!(), line!())
                 .extend(more_first_positions.iter());
           }
-          debug_display_appending(&more_first_positions);
+          //debug_display_appending(&more_first_positions);
           group.first_positions.extend(more_first_positions.iter());
         } else if c == '*' || c == '+' {
-          println!("Extending follow positions due to * operator.");
+          //println!("Extending follow positions due to * operator.");
           for p in group.last_positions.iter() {
-            print!("self.follow_positions_map[{}] += ", Position::from(p.idx
-            ()));
+            //print!("self.follow_positions_map[{}] += ", Position::from(p.idx
+            //()));
 
-            group.debug_log_position_set(TargetSet::First, 0);
+            //group.debug_log_position_set(TargetSet::First, 0);
             self.follow_positions(p.index_with_iter(), file!(), line!())
                 .extend(group.first_positions.iter());
-            debug_display_appending(&group.first_positions);
+            //debug_display_appending(&group.first_positions);
           }
         }
       } else if c == '{' {
@@ -869,6 +864,7 @@ impl<'a> Parser<'a> {
           // CHECKED added pfirstpos to point to updated group.first_positions with lazy quants
           // We need `lazy_first_positions` to potentially hold the value produced inside the first
           // if block below. Otherwise it is unused.
+          #[allow(unused_assignments)]
           let mut lazy_first_positions: PositionSet = PositionSet::new();
           let mut first_position_ptr: &PositionSet = &group.first_positions;
           // CHECKED algorithmic options 8/1 added to make ((a|b)*?b){2} work
@@ -881,7 +877,7 @@ impl<'a> Parser<'a> {
             for p in group.last_positions.iter() {
               self.follow_positions(p.index_with_iter(), file!(), line!())
                   .extend(first_position_ptr.iter());
-              debug_display_appending(first_position_ptr);
+              //debug_display_appending(first_position_ptr);
             }
           }
           else if m > 0 {
@@ -908,7 +904,7 @@ impl<'a> Parser<'a> {
 
               for (position, positions_set) in more_follow_positions.iter() {
                 self.follow_positions(*position, file!(), line!()).extend(positions_set.borrow().iter());
-                debug_display_appending(&*positions_set.borrow());
+                //debug_display_appending(&*positions_set.borrow());
               }
             }
 
@@ -920,7 +916,7 @@ impl<'a> Parser<'a> {
                     Position(k.index_with_iter().into()).increment_iter(group.iteration * i), file!(),
                     line!()
                   ).insert(j.increment_iter(group.iteration * (i + 1)));
-                  println!("Inserting the item {}", j.increment_iter(group.iteration * (i + 1)));
+                  //println!("Inserting the item {}", j.increment_iter(group.iteration * (i + 1)));
                 }
               }
             }
@@ -977,6 +973,7 @@ impl<'a> Parser<'a> {
       c = self.c();
     }
 
+    /*
     //println!("group.first_positions = ");
     group.debug_log_position_set(TargetSet::First, 0);
     //println!("group.last_positions = ");
@@ -984,6 +981,7 @@ impl<'a> Parser<'a> {
     self.debug_log_follow_map(0);
 
     println!("END parse_iterated()");
+    */
   }
 
 
@@ -1009,7 +1007,7 @@ impl<'a> Parser<'a> {
   */
   #[allow(unused_variables)]
   fn parse_grouped(&mut self, group: &mut Group) {
-    println!("BEGIN parse_grouped({}) <parse4>", self.idx);
+    //println!("BEGIN parse_grouped({}) <parse4>", self.idx);
 
     // todo: Should this just be a new group?
     group.first_positions.clear();
@@ -1291,11 +1289,12 @@ impl<'a> Parser<'a> {
       RegexError::EmptyExpression(self.idx).emit()
     }
 
-
+    /*
     group.debug_log_position_set(TargetSet::First, 0);
     group.debug_log_position_set(TargetSet::Last, 0);
     self.debug_log_follow_map(0);
     println!("END parse_grouped() <parse4>");
+    */
   }
 
 
@@ -1455,7 +1454,7 @@ impl<'a> Parser<'a> {
       .to_ascii_lowercase() == name.to_ascii_lowercase().as_bytes()
       {
         self.idx += name.len() as Index32;
-        println!("posix({})", name);
+        //println!("posix({})", name);
         return POSIX_CLASSES[i];
       }
     }
