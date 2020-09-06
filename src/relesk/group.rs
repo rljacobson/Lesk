@@ -55,7 +55,8 @@ pub struct Group{
   pub subpattern_endpoints: Vec<Index32>, //< Subpatterns' ending '|' or '\0'
 
   /// Created with the group, incremented in `parse_iterated()`
-  pub lazy_index          : Lazy8,        //< ??
+  pub lazy_index     : Lazy8,        //< ??
+  pub is_first_group : bool,
 
   /// Group indices that are set as lazy. These are ultimately encoded into `Position`s (in the
   /// top-most byte) when control flow returns to the `parse()` function.
@@ -81,20 +82,18 @@ impl Group {
 
   */
   pub fn append_idx_as_lazy_accepted(&mut self, position_set: &mut PositionSet){
-    if self.nullable {
-      if self.lazy_set.is_empty() {
-        position_set.insert(Position(self.idx as u64).set_accept(true));
-      }
-      else {
+    if self.lazy_set.is_empty() {
+      position_set.insert(Position(self.idx as u64).set_accept(true));
+    }
+    else {
 
-        for l in self.lazy_set.iter() {
-          position_set
-              .insert(
-                Position(self.idx as u64)
-                .set_accept(true)
-                .set_lazy(*l)
-              );
-        }
+      for l in self.lazy_set.iter() {
+        position_set
+        .insert(
+          Position(self.idx as u64)
+          .set_accept(true)
+          .set_lazy(*l)
+        );
       }
     }
   }
@@ -105,26 +104,10 @@ impl Group {
 
     for p in last_positions.iter(){
       self.append_idx_as_lazy_accepted(
-        &mut *follow_map[Position(p.idx().into())].borrow_mut()
+        &mut *follow_map.entry(p.index_with_iter().into()).or_default().borrow_mut()
       );
     }
   }
-
-
-  /// Extends the `TargetSet` in-place with `positions` without consuming it.
-  pub fn extend_with(&mut self, target: TargetSet, positions: &PositionSet){
-    self.from_target_mut(target).extend(positions.iter());
-  }
-
-
-  /// Same as `extend_with()` but lazifies the `source_set` first.
-  pub fn extend_with_lazy(&mut self, target_set: TargetSet, source_set: &PositionSet){
-    let mut lazy_source = self.lazify(&source_set);
-    let position_set = self.from_target_mut(target_set);
-    // As lazy_source is a copy, it may be consumed.
-    position_set.append(&mut lazy_source);
-  }
-
 
 
   /// Makes everything in positions greedy.

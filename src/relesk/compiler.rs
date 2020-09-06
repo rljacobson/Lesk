@@ -42,14 +42,18 @@ use opcode::{
   opcode_take,
   opcode_tail
 };
+
+use defaultmap::DefaultHashMap;
+
+use crate::valuecell::ValueCell;
+
 use options::Options;
 use state::{State, VcState, StateNextIterator};
-use crate::valuecell::ValueCell;
-use crate::relesk::opcode::OPCODE_REDO;
+use opcode::OPCODE_REDO;
+
 
 
 type PredictMap = DefaultHashMap<u16, PredictBits8>;
-
 
 static CODE_EXTENSIONS   : [&str; 4] = [".h", ".hpp", ".cpp", ".cc"];
 static DFA_EXTENSIONS    : [&str; 1] = [".gv"];

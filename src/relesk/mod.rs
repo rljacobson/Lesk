@@ -24,7 +24,6 @@ use ranges::Ranges;
 use position::{Position, PositionSet};
 use chars::Chars;
 use character::*;
-use defaultmap::DefaultHashMap;
 use position::VcPositionSet;
 
 
@@ -46,5 +45,5 @@ type LazySet     = HashSet<Lazy8>; //< Positions within the regex that are lazil
 type Move        = (Chars, VcPositionSet); //< Analogous to an `Edge`, but without a `State`
 type IndexRanges = Ranges<Index32>;
 type MapToRanges = HashMap<Index32, IndexRanges>;
-type FollowMap   = DefaultHashMap<Position, VcPositionSet>;
+type FollowMap   = HashMap<Position, VcPositionSet>;
 
