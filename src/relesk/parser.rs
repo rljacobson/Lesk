@@ -1457,9 +1457,13 @@ impl<'a> Parser<'a> {
       //}
     }
 
-    // Previous added state in the state.next.next.next... chain.
+    // The last state in the state.next.next... linked list..
     let mut last_state: VcState = self.start.clone();
-    for state in StateNextIterator::new(self.start.clone()) {
+    let mut state: VcState = last_state.clone();
+
+    loop {
+
+
       // Set the timer.
       edge_start_time = timer.start();
 
@@ -1477,6 +1481,8 @@ impl<'a> Parser<'a> {
       */
 
       self.compile_transition(state.clone());
+
+      println!("Moves after compile_transition: {}", self.moves.len());
 
       /*
       if let Some(root_node) = &state.borrow().tnode {
@@ -1550,27 +1556,33 @@ impl<'a> Parser<'a> {
 
       self.edges_time += timer.delta(edge_start_time, timer.end());
 
-      for (ref mut position, positions_set) in self.moves.iter_mut()
-      {
+      for (ref mut characters, positions_set) in self.moves.iter_mut() {
         // (position, positions_set): (Chars, Positions)
         if !ValueCell::borrow(positions_set).is_empty() {
-          let entry = table.entry(positions_set.clone());
-          let target_state: &mut VcState =
-          match entry {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) =>
-              entry.insert(State::with_pos(positions_set.clone()))
-          };
+
+          print!("Move encountered: ({}, ",
+            characters.into_iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", "))
+          ;
+          println!(") => {:?}", positions_set.borrow());
+
+          let target_state: &mut VcState = table.entry(positions_set.clone()).or_insert_with(|| State::with_pos
+          (positions_set.clone()));
+
           last_state.borrow_mut().next = Some(target_state.clone());
           last_state = target_state.clone();
-          // RJ: Connect every NFA state in the DFA state to the target_state.
+
+
+          println!("Does last_state == state.next?  {}", state.borrow().next == Some(last_state
+          .clone()));
+
+          // Count how many edges we added.
           // todo: What does this do that is different from `Chars::hi()`/`Chars::lo()`?
-          let mut lo: Char = position.lo();
-          let max: Char = position.hi();
+          let mut lo: Char = characters.lo();
+          let max: Char = characters.hi();
           while lo <= max {
-            if position.contains(lo) {
+            if characters.contains(lo) {
               let mut hi: Char = lo + 1u16;
-              while hi <= max && position.contains(hi) {
+              while hi <= max && characters.contains(hi) {
                 hi += 1;
               }
               hi -= 1;
@@ -1583,6 +1595,8 @@ impl<'a> Parser<'a> {
               #[cfg(not(feature = "REVERSE_ORDER_EDGE_COMPACT"))]
               { state.borrow_mut().edges.insert(hi, (lo, target_state.clone())); }
 
+              println!("Added {} edges.", (hi.0 - lo.0 + 1));
+
               self.edge_count += (hi.0 - lo.0 + 1) as usize;
               lo = hi + 1;
             }
@@ -1591,14 +1605,17 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let accept_value = state.borrow_mut().accept;
-      if accept_value > 0 && accept_value as usize <= self.subpattern_endpoints.len() {
-        self.subpattern_is_accepting[(accept_value - 1) as usize] = true;
+      let accept_value = state.borrow_mut().accept as usize;
+      if accept_value > 0 && accept_value<= self.subpattern_endpoints.len() {
+        self.subpattern_is_accepting[accept_value - 1] = true;
       }
+
+      //let next_thing = ;
+      state = last_state.clone();
 
       self.moves.clear();
       self.vertex_count += 1;
-    }
+    };
 
     self.vertices_time += timer.delta(vertex_start_time, timer.end()) - self.edges_time;
     println!("END compile()");
@@ -1614,8 +1631,13 @@ impl<'a> Parser<'a> {
     { // Scope of references below.
       let mut state_ref = state.borrow_mut();
       let positions_rc = state_ref.positions.clone();
-      let positions_ref = positions_rc.borrow_mut();
-      for k in positions_ref.iter() {
+      //let positions_ref = positions_rc.borrow();
+      let positions_length = positions_rc.borrow().len();
+      //for k in positions_ref.iter() {
+      for k_index in 0..positions_length {
+
+        let k: Position = *positions_rc.borrow().iter().nth(k_index).unwrap();
+
         if k.is_accept() {
 
           // pick lowest nonzero accept index
@@ -1697,7 +1719,7 @@ impl<'a> Parser<'a> {
                 }
 
 
-                if !self.follow_positions_map.contains_key(k) {
+                if !self.follow_positions_map.contains_key(&k) {
                   // self.follow_positions is not defined for lazy pos yet, so add lazy self.follow_positions (memoization)
                   let mut more_positions: PositionSet;
                   { // scope of follow
@@ -1710,20 +1732,20 @@ impl<'a> Parser<'a> {
                         }
                       ).collect();
                   }
-                  self.follow_positions(*k, file!(), line!()).append(&mut more_positions);
+                  self.follow_positions(k, file!(), line!()).append(&mut more_positions);
                 }
 
 
                 #[cfg(feature = "DEBUG")]
                 {
-                  println!("lazy self.follow_positions(");
+                  print!("lazy self.follow_positions(");
                   print!("{}", k);
                   print!(" ) = {{");
-                  debug_log_position_set(&*self.follow_positions_map[k].borrow(), 0);
+                  debug_log_position_set(&*self.follow_positions_map[&k].borrow(), 0);
                   println!(" }}");
                 }
 
-                self.follow_positions_map[k].clone()
+                self.follow_positions_map[&k].clone()
               } // end if k.lazy()
               else {
                 self.follow_positions_map[&Position(k.idx().into())].clone()
@@ -1741,8 +1763,6 @@ impl<'a> Parser<'a> {
               } else {
                 match char::from(c) {
                   '.' => {
-                    // todo: These constants are ridiculous. Replace with
-                    //       `Chars::new().insert('whatever')`
                     let dot_all_characters =
                     match self.modifiers.is_set(k.idx(), Mode::s) {
                       true => ALL_CHARS,         // DotAll Mode - `.` matches newlines
@@ -2053,7 +2073,7 @@ impl<'a> Parser<'a> {
       for (i_chars, i_positions) in self.moves.iter_mut() {
         if chars.intersects(i_chars) {
           // Combine this transition with any existing super-transitions.
-          let follow_ref = follow.borrow_mut();
+          let follow_ref = follow.borrow();
           if ValueCell::borrow(i_positions).is_subset(&follow_ref) {
             *chars -= *i_chars;
           } else {
@@ -2080,6 +2100,7 @@ impl<'a> Parser<'a> {
       self.moves.append(&mut more_moves);
     }
     if !chars.is_empty() {
+      println!("Pushing Chars");
       self.moves.push((*chars, follow.clone()));
     }
   }
