@@ -1,6 +1,6 @@
 # Project Specific
-
-ignored
+/RE_flex
+/ignored
 
 # Rust
 Cargo.lock
