@@ -7,11 +7,18 @@ contents.
 
 mod options;
 mod specification;
+mod error;
+mod parser;
+mod span;
+
+use std::collections::{HashMap, HashSet};
+
+use span::*;
 
 pub use options::Options;
 pub use specification::Specification;
+pub use span::*;
 
-use std::collections::{HashMap, HashSet};
 
 use codespan::Span as Code;
 

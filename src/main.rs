@@ -1,11 +1,9 @@
 #![feature(entry_insert)]
 
+use nom_locate;
+use lesk;
 
-mod spec;
 
-use structopt::StructOpt;
-
-use spec::Specification;
 
 fn main() {
     //let _parser = Parser::new("(?imsqx)abc*|ghj", "bimopf=one.h, one.cpp, two.cpp, stdout;qrswx");
