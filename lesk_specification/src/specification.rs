@@ -4,22 +4,23 @@ use std::io::{Write, Read, BufWriter};
 use std::fs::File;
 
 use structopt::StructOpt;
-use codespan_reporting::{diagnostic::Diagnostic, files::SimpleFiles};
 
 use super::*;
+use parser::parser::section_1 as parse_section_one;
+use nom_locate::LocatedSpan;
+
 
 static DEFAULT_OUTPUT_PATH: &str = "lex.yy.cpp";
 
 
-//#[derive(Default)]
 pub struct Specification<'s> {
   pub options : Options, //< maps option name (from the options_table) to its option value
   color_term  : bool,    //< terminal supports colors
 
   writer       : Box<dyn FnMut(&str)>, //< output stream
-  code_files   : SimpleFiles<String, String>,       //< Source code database
-  source       : String,               //< source text
-  in_file      : String,
+  source_files: SourceFiles,       //< Source code database
+  // source       : String,               //< source text
+  source_id    : FileId,
 
   conditions  : StrVec<'s>, //< "INITIAL" start condition etc. defined with %x name
   definitions : StrMap<'s>, //< map of {name} to regex
@@ -29,13 +30,13 @@ pub struct Specification<'s> {
   line           : &'s str,      //< current line read from input
   lineno         : usize,        //< current line number at input
   patterns       : StrVec<'s>,   //< regex patterns for each start condition
-  rules          : RulesMap<'s>, //< <Start_i>regex_j action for Start i Rule j
-  section_1      : Codes,        //< %{ user code %} in section 1 container
-  section_2      : CodesMap,     //< lexer user code in section 2 container
-  section_3      : Codes,        //< main user code in section 3 container
-  section_init   : Codes,        //< %init{ init code %} in section 1 container
-  section_struct : Codes,        //< %class{ class code %} in section 1 container
-  section_top    : Codes,        //< %top{ user code %} in section 1 container
+  rules          : RulesMap, //< <Start_i>regex_j action for Start i Rule j
+  section_1      : Code,        //< %{ user code %} in section 1 container
+  section_2      : CodeMap,     //< lexer user code in section 2 container
+  section_3      : Code,        //< main user code in section 3 container
+  section_init   : Code,        //< %init{ init code %} in section 1 container
+  section_struct : Code,        //< %class{ class code %} in section 1 container
+  section_top    : Code,        //< %top{ user code %} in section 1 container
 
 }
 
@@ -52,9 +53,10 @@ impl<'s> Default for Specification<'s> {
       color_term     : true,
       // todo        : writer to be replaced with Akama
       writer         : Box::new(|_|{}),       // a dummy initial value
-      code_files     : SimpleFiles::new(),
-      source         : String::default(),
-      in_file        : String::default(),
+      source_files: SourceFiles::default(),
+      // source         : String::default(),
+      // in_file        : String::default(),
+      source_id      : FileId::new(43),       // Arbitrary initial value will be overwritten
       conditions     : StrVec::default(),
       definitions    : StrMap::default(),
       inclusive      : Starts::default(),
@@ -63,12 +65,12 @@ impl<'s> Default for Specification<'s> {
       lineno         : 0,
       patterns       : StrVec::default(),
       rules          : RulesMap::default(),
-      section_1      : Codes::default(),
-      section_2      : CodesMap::default(),
-      section_3      : Codes::default(),
-      section_init   : Codes::default(),
-      section_struct : Codes::default(),
-      section_top    : Codes::default(),
+      section_1      : Code::default(),
+      section_2      : CodeMap::default(),
+      section_3      : Code::default(),
+      section_init   : Code::default(),
+      section_struct : Code::default(),
+      section_top    : Code::default(),
 
     };
 
@@ -77,7 +79,7 @@ impl<'s> Default for Specification<'s> {
     // Establish the output stream
 
     new_spec.writer = // the value of the if statement
-    if let Some(path) = &new_spec.options.out_file{
+    if let Some(path) = &new_spec.options.out_file {
       let f = File::create(&path)
                 .expect(format!("Unable to create file: {}", &path).as_str());
       let mut buf_writer = BufWriter::new(f);
@@ -128,38 +130,7 @@ impl<'s> Default for Specification<'s> {
       }
     };
 
-
-    // Read the source file
-
-    // Read from STDIN
-    if &new_spec.options.in_file == "STDIN" {
-      // Both `new_source` and `new_file` will be consumed.
-      let mut new_source = String::default();
-      let mut in_file    = String::default();
-
-      std::mem::swap(&mut new_spec.options.in_file, &mut in_file);
-      let _ = std::io::stdin().read_to_string(&mut new_source);
-      new_spec.code_files.add(in_file, new_source);
-    }
-    // Read from a file
-    else {
-      // Both `new_source` and `new_file` will be consumed.
-      let mut new_source = String::default();
-      let mut in_file    = String::default();
-
-      std::mem::swap(&mut new_spec.options.in_file, &mut in_file);
-      std::fs::File::open(&in_file)
-        .expect(format!(
-          "Could not read from file: {}",
-          &in_file
-        ).as_str())
-        .read_to_string(&mut new_source)
-        .unwrap_or_else(
-          |x| { panic!("Could not read from file: {:?}", x.into_inner()); }
-        );
-
-      new_spec.code_files.add(in_file, new_source);
-    }
+    new_spec.init_source_file();
 
     new_spec
 
@@ -171,9 +142,48 @@ impl<'s> Specification<'s> {
     Self::default()
   }
 
+  pub fn set_in_file(&mut self, path: String){
+    self.options.in_file = path;
+    self.init_source_file();
+  }
+
+
+  fn init_source_file(&mut self) {
+    // Read the source file
+
+    // Read from STDIN
+    if self.options.in_file == "STDIN" {
+      // Both `new_source` and `new_file` will be moved.
+      let mut new_source = String::default();
+      let mut in_file = self.options.in_file.clone();
+
+      let _ = std::io::stdin().read_to_string(&mut new_source);
+      self.source_id = self.source_files.add(in_file, new_source);
+    }
+    // Read from a file
+    else {
+      // Both `new_source` and `new_file` will be consumed.
+      let mut new_source = String::default();
+      let mut in_file    = String::default();
+
+      std::mem::swap(&mut self.options.in_file, &mut in_file);
+      std::fs::File::open(&in_file)
+          .expect(format!(
+            "Could not read from file: {}",
+            &in_file
+          ).as_str())
+          .read_to_string(&mut new_source)
+          .unwrap_or_else(
+            |x| { panic!("Could not read from file: {:?}", x.into_inner()); }
+          );
+
+      self.source_id = self.source_files.add(in_file, new_source);
+    }
+  }
 
   pub fn parse(&mut self) {
-    if self.source.is_empty(){
+
+    if self.source_files.files.is_empty(){
       eprintln!("Empty source file.");
       return;
     }
@@ -189,6 +199,22 @@ impl<'s> Specification<'s> {
 
 
   pub fn parse_section_1(&mut self) {
+
+    let result = parse_section_one(
+      LocatedSpan::new(self.source_files.get(self.source_id).source().as_str())
+    );
+
+    match result {
+      Ok((_rest, section_items)) => {
+        for item in section_items {
+          println!("{}", item);
+        }
+      },
+
+      Err(e) => {
+        println!("ERROR: {}", e);
+      }
+    }
 
   }
 

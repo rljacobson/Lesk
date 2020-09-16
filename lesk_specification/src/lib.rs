@@ -9,41 +9,43 @@ mod options;
 mod specification;
 mod error;
 mod parser;
-mod span;
+mod code;
+mod section_items;
 
 use std::collections::{HashMap, HashSet};
 
-use span::*;
-
 pub use options::Options;
 pub use specification::Specification;
-pub use span::*;
+pub use crate::parser::{Span, source::FileId};
 
+use crate::parser::source;
 
-use codespan::Span as Code;
+type SourceFiles = source::SourceFiles<String>;
+type SourceFile = source::SourceFile<String>;
 
 // todo: AddList?
-type Codes          = Vec<Code>;                //< Collection of ordered lines of code
-type CodesMap       = HashMap<Start, Codes>;    //< Map of start conditions to lines of code
+type Code = Vec<Span>;                //< Collection of ordered lines of code
+type CodeMap = HashMap<Start, Code>;    //< Map of start conditions to lines of code
 type Dictionary<'s> = HashMap<String, &'s str>; //< Dictionary (const char*)
 // todo: AddList?
-type Rules<'r>      = Vec<Rule<'r>>;            //< Collection of ordered rules
-type RulesMap<'r>   = HashMap<Start, Rule<'r>>; //< Map of start conditions to rules
+type Rules      = Vec<Rule>;            //< Collection of ordered rules
+type RulesMap   = HashMap<Start, Rule>; //< Map of start conditions to rules
 type Start          = usize;                    //< Start condition state type
 type Starts         = HashSet<Start>;           //< Set of start conditions
 type StrMap<'s>     = HashMap<&'s str, &'s str>;//< Dictionary (std::string)
 // todo: AddList?
 type StrVec<'s>     = Vec<&'s str>;             //< Collection of ordered strings
 
-// todo: Write the Library struct
+
+// todo: Write the RegexEngine struct
 #[derive(Default)]
-struct Library;
+struct RegexEngine;
 
 
 /// A regex pattern and action pair that forms a rule
-struct Rule<'r> {
-  pattern : &'r str, //< the pattern
-  regex   : &'r str, //< the pattern-converted regex for the selected regex engine
-  code    : Code     //< the action code corresponding to the pattern
+struct Rule {
+  pattern : Span,    //< the pattern
+  regex   : String,  //< the pattern-converted regex for the selected regex engine
+  code    : Span     //< the action code corresponding to the pattern
 }
 

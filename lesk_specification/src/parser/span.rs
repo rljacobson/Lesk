@@ -1,11 +1,10 @@
 
 use nom_locate;
-use codespan::Span;
+pub use codespan::Span;
+use nom::{Slice, Offset};
 
 
-
-pub type LocatedSpan<'a> = nom_locate::LocatedSpan<&'a str>;
-pub type PResult<'a, T> = nom::IResult<LocatedSpan<'a>, T>;
+pub type LSpan<'a> = nom_locate::LocatedSpan<&'a str>;
 
 
 pub trait HasSpan {
@@ -34,10 +33,10 @@ impl<'a, T: ToSpan> ToSpan for &'a T {
   }
 }
 
-impl<'a> ToSpan for LocatedSpan<'a> {
+impl<'a> ToSpan for LSpan<'a> {
   fn to_span(&self) -> Span {
-    let start = self.offset;
-    let end = start + self.fragment.len();
+    let start = self.offset( &self.slice(self.fragment().len()..)  );
+    let end = start + self.fragment().len();
     Span::new(start as u32, end as u32)
   }
 }

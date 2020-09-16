@@ -1,5 +1,5 @@
 [package]
-name = "lesk"
+name = "lesk-specification"
 version = "0.1.0"
 authors = ["Robert Jacobson <rljacobson@gmail.com>"]
 edition = "2018"
@@ -12,11 +12,13 @@ DEBUG = []
 
 [dependencies]
 # command line argument parsing
-structopt = { version = "0.3.17", features = ["wrap_help", "color", "debug"] }
+structopt = { version = "0.3.17", features = ["wrap_help", "color"] }
 codespan = "0.9.5"            # Representing source code
 codespan-reporting = "0.9.5"  # Error reporting
-nom = "6.0.0-alpha1"
-nom_locate = "2.0.0"  # Nom input type with location information.
+nom = "5.1.2"
+# Nom input type with location information.
+nom_locate = "2.0.0"
+smallvec = "1.4.2"
 
 #lazy_static    = "1.4.0"
 #macro-attr     = {git = "https://github.com/DanielKeep/rust-custom-derive.git"}
