@@ -206,6 +206,7 @@ impl<'s> Specification<'s> {
 
     match result {
       Ok((_rest, section_items)) => {
+        println!("Parsed {} items.", section_items.len());
         for item in section_items {
           println!("{}", item);
         }

@@ -155,17 +155,17 @@ impl From<ParsedCode> for SectionOneItemSet {
   fn from(parsed_code: ParsedCode) -> Self {
     let mut result = SectionOneItemSet::default();
 
-    if !parsed_code.unknown_code.is_empty() {
-      result.push(Unknown(parsed_code.user_code).into());
+    if !parsed_code.user_code.is_empty() {
+      result.push(User(parsed_code.user_code).into());
     }
-    if !parsed_code.unknown_code.is_empty() {
-      result.push(Unknown(parsed_code.top_code).into());
+    if !parsed_code.top_code.is_empty() {
+      result.push(Top(parsed_code.top_code).into());
     }
-    if !parsed_code.unknown_code.is_empty() {
-      result.push(Unknown(parsed_code.class_code).into());
+    if !parsed_code.class_code.is_empty() {
+      result.push(Class(parsed_code.class_code).into());
     }
-    if !parsed_code.unknown_code.is_empty() {
-      result.push(Unknown(parsed_code.init_code).into());
+    if !parsed_code.init_code.is_empty() {
+      result.push(Init(parsed_code.init_code).into());
     }
     if !parsed_code.unknown_code.is_empty() {
       result.push(Unknown(parsed_code.unknown_code).into());

@@ -135,7 +135,7 @@ pub fn skip<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>) -> NomResult<Inp
   )(i)
 }
 
-/// Noms whitespace, including newlines and comments, returning `O::default()`.
+/// Noms whitespace, including newlines and comments.
 pub fn skip1<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>) -> NomResult<InputType<'a>, (), E>
 {
   value(
@@ -153,7 +153,7 @@ pub fn eol_comment<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
 {
   value(
     (), // Output is thrown away.
-    pair(tag("//"), none_of("\n\r")),
+    pair(tag("//"), is_not("\n\r")),
   )(i)
 }
 

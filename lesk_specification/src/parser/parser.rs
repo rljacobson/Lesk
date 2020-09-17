@@ -119,21 +119,16 @@ pub fn section_1(i: InputType) -> SResult {
 Parses line(s) of code as found in `%{ %}`, `%%top`, `%%class`, and `%%init`, returning a
 `SectionOneItemSet`. Assumes the opening delimiter has been parsed.
 */
-pub fn code<'a>(i: InputType<'a>) -> SResult
+pub fn code(i: InputType) -> SResult
 {
-  // Local closures that Curry `nested_code`
-  let parse_nonuser_code: &dyn Fn(InputType<'a>) -> PResult =
-      &|input| nested_code(input, 0, 1, false);
-  let parse_user_code: &dyn Fn(InputType<'a>) -> PResult =
-      &|input| nested_code(input, 1, 0, true);
-
-
   alt((
     // todo: Where does code within a nested `%{.. %}` go?
 
     // %top{
     map(
-      preceded(tag("%top{"), parse_nonuser_code),
+      preceded(tag("%top{"),
+        |input| nested_code(input, 0, 1, false)
+      ),
       |mut parsed| {
         std::mem::swap(&mut parsed.unknown_code, &mut parsed.top_code);
         parsed.into()
@@ -142,7 +137,9 @@ pub fn code<'a>(i: InputType<'a>) -> SResult
 
     // %class{
     map(
-      preceded(tag("%class{"), parse_nonuser_code),
+      preceded(tag("%class{"),
+        |input| nested_code(input, 0, 1, false)
+      ),
       |mut parsed| {
         std::mem::swap(&mut parsed.unknown_code, &mut parsed.class_code);
         parsed.into()
@@ -151,7 +148,9 @@ pub fn code<'a>(i: InputType<'a>) -> SResult
 
     // %init{
     map(
-      preceded(tag("%init{"), parse_nonuser_code),
+      preceded(tag("%init{"),
+        |input| nested_code(input, 0, 1, false)
+      ),
       |mut parsed| {
         std::mem::swap(&mut parsed.unknown_code, &mut parsed.init_code);
         parsed.into()
@@ -161,27 +160,33 @@ pub fn code<'a>(i: InputType<'a>) -> SResult
     // An unknown labeled code block is an error: `%anythingelse{`
 
     map_res(  //::<_, _, _, _, E2: Errors, _, _, _>(
-              delimited(char1('%'), alphanumeric1, char1('{')),
-              |l_span: LSpan| {
-                let name = l_span.slice(1..l_span.fragment().len() - 2);
-                let rest = Some(i.slice((l_span.fragment().len() + 2)..));
+      delimited(char1('%'), alphanumeric1, char1('{')),
+      |l_span: LSpan| {
+        let name = l_span.slice(1..l_span.fragment().len() - 2);
+        let rest = Some(i.slice((l_span.fragment().len() + 2)..));
 
-                Err(Errors::from(
-                  InvalidLabel(
-                    InvalidLabelError::new(name, name, rest).into()
-                  )
-                ))
-              }
+        Err(Errors::from(
+          InvalidLabel(
+            InvalidLabelError::new(name, name, rest).into()
+          )
+        ))
+      }
     ),
 
     // Unlabeled block code within `%{ %}`
-    map(preceded(tag("%{"), parse_nonuser_code),
-        |x| x.into()),
+    map(preceded(tag("%{"),
+        |input| nested_code(input, 0, 1, false)
+      ),
+      |x| x.into()
+    ),
 
 
     // ordinary user code within plain `{ }`
-    map(preceded(tag("{"), parse_user_code),
-        |x| x.into()),
+    map(preceded(tag("{"),
+        |input| nested_code(input, 1, 0, true)
+      ),
+      |x| x.into()
+    ),
   ))(i)
 }
 
@@ -202,6 +207,52 @@ This function halts parsing on error.
 pub fn nested_code(i: InputType, mut brace_level: i32, mut block_level: i32, is_user_code: bool)
                    -> PResult
 {
+  if brace_level + block_level != 1 {
+    // This is not the outer-most level
+    map(
+      many1(
+        |input| parse_section_item(input, brace_level, block_level, is_user_code)
+        /*
+      // | i | {
+      //   if block_level + brace_level == 1 {
+      //     // Initial value for fold
+      //     Ok((i, ParsedCode::default()))
+      //   } else {
+      //     Err(NomErr::Error(Errors::from(Error::Nom(i.to_span(), ErrorKind::Alt))))
+      //   }
+      // }
+
+    // cond(block_level != 0 || brace_level != 0)
+
+    //
+    // // Initial value for fold
+    // ParsedCode::default(),
+    //
+    // // Accumulate the vector of results into a single `ParsedCodeBlock` for function return value
+    // |mut acc, next| {
+    //   acc.append(next.into());
+    //   acc
+    // },
+
+ */
+      ),
+      |mut v| {
+        v.drain(..).fold(ParsedCode::default(), |mut acc, next| {
+          acc.append(next);
+          acc
+        })
+      }
+    )(i)
+
+  } else {
+    // The outer-most level,
+    parse_section_item(i, brace_level, block_level, is_user_code)
+  }
+}
+
+fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, is_user_code: bool) -> PResult{
+  // region Local helper functions
+
   // Local helper function to keep DRY. (FIVE functions, four closures, three closures deep
   // inside the outer function.)
   fn make_open_delim_parser(
@@ -215,7 +266,11 @@ pub fn nested_code(i: InputType, mut brace_level: i32, mut block_level: i32, is_
     move |input| {
       preceded(
         tag(open_delim),
-        |l_span: InputType| {
+        |mut l_span: InputType| {
+          // In the case of `%{`, exclude the `%`.
+          if open_delim.starts_with("%") {
+            l_span = input.slice(1..);
+          }
           let mut result = nested_code(l_span, brace, block, user_code);
           match result {
 
@@ -253,43 +308,48 @@ pub fn nested_code(i: InputType, mut brace_level: i32, mut block_level: i32, is_
   fn make_close_delim_parser(close_delim: &'static str, level: i32, user_code: bool)
                              -> impl Fn(InputType) -> Result
   {
-    // todo: shave off the closing `%}`, but leave `}`.
-
     move |input| {
       preceded(tag(close_delim),
-       |l_span: InputType| {
-         /*
+               |mut l_span: InputType| {
 
-        Since `level` is decremented  by virtue of returning from `nested_code`, there
-        is no need to decrement it here. All that can happen is that we encounter `%}`
-        when we expected `}`. Having too many closing braces manifests as an error
-        elsewhere.
+                 /*
 
-        However, we can detect the special case that we see too many closing braces by
-        checking if level would be negative when we return if the brace is correct.
+                Since `level` is decremented  by virtue of returning from `nested_code`, there
+                is no need to decrement it here. All that can happen is that we encounter `%}`
+                when we expected `}`. Having too many closing braces manifests as an error
+                elsewhere.
 
-           if !user_code {
-            let mut errors = Errors::new();
-            errors.push(Error::UnclosedDelim(
-              UnclosedDelimError::new::<LSpan, LSpan>(vec![], input)
-            ));
-            Err(NomErr::Failure(errors))
-          }
-          else
-        */
-         if user_code && level == 0 {
-           // Wrong kind of closing brace
-           let mut errors = Errors::new();
-           errors.push(IncorrectDelim(
-             IncorrectDelimError::new(
-               close_delim, input.slice(..close_delim.len()), None, l_span,
-             )
-           ));
-           Err(NomErr::Failure(errors))
-         } else {
-           Ok((input, l_span.slice(0..0)))
-         }
-       },
+                However, we can detect the special case that we see too many closing braces by
+                checking if level would be negative when we return if the brace is correct.
+
+                   if !user_code {
+                    let mut errors = Errors::new();
+                    errors.push(Error::UnclosedDelim(
+                      UnclosedDelimError::new::<LSpan, LSpan>(vec![], input)
+                    ));
+                    Err(NomErr::Failure(errors))
+                  }
+                  else
+                */
+                 if user_code && level == 0 {
+                   // Wrong kind of closing brace
+                   let mut errors = Errors::new();
+                   errors.push(IncorrectDelim(
+                     IncorrectDelimError::new(
+                       close_delim, input.slice(..close_delim.len()), None, l_span,
+                     )
+                   ));
+                   Err(NomErr::Failure(errors))
+                 } else {
+                   // In the case of `\n%}`, exclude the `%`.
+                   if close_delim.starts_with("\n%") {
+                     l_span = input.slice(2..);
+                   }
+
+
+                   Ok((input, l_span.slice(0..0)))
+                 }
+               },
       )(input)
     }
   }
@@ -297,6 +357,7 @@ pub fn nested_code(i: InputType, mut brace_level: i32, mut block_level: i32, is_
   // Local helper function only used below.
   fn into_code_block(user_code: bool) -> impl Fn(InputType) -> ParsedCode {
     move |l_span: InputType| {
+      println!("into_code_block: {}", l_span);
       if user_code {
         CodeBlock::user_code(l_span.to_span()).into()
       } else {
@@ -305,94 +366,63 @@ pub fn nested_code(i: InputType, mut brace_level: i32, mut block_level: i32, is_
     }
   }
 
-  map(
-    many_till(
-      alt((
-        // Only two uses of `make_open_delim_parser`
-        // Opening of a new code block which has special meaning
-        make_open_delim_parser("\n%{", brace_level, block_level + 1, false),
-        // Opening of a new brace level
-        make_open_delim_parser("{", brace_level + 1, block_level, is_user_code),
+  // endregion
 
-        // Only two uses of `make_close_delim_parser`
-        // Closing of a code block which has special meaning
-        map(
-          make_close_delim_parser("\n%}", block_level, is_user_code),
-          // Include `\n` but not `%}` in the code block.
-          |l_span| into_code_block(is_user_code)(l_span),
-        ),
-        // Closing of a braced level
-        map(
-          make_close_delim_parser("}", brace_level, is_user_code),
-          into_code_block(is_user_code),
-        ),
+  alt((
+    // Only two uses of `make_open_delim_parser`
+    // Opening of a new code block which has special meaning
+    make_open_delim_parser("\n%{", brace_level, block_level + 1, false),
+    // Opening of a new brace level
+    make_open_delim_parser("{", brace_level + 1, block_level, is_user_code),
 
-        // An occurrence of `\n%%` within a block is always an error.
-        preceded(
-          tag("\n%%"),
-          |l_span: InputType| {
-            if is_user_code && block_level == 0 && brace_level == 0 {
-              // We know this is a hard error, because we are outside of all blocks.
-              PResult::Err(NomErr::Failure(Errors::from(ExpectedFound(
-                ExpectedFoundError::new::<_, _, Span>("}", "%%", l_span.to_span()).into()
-              ))))
-            } else if block_level == 0 && brace_level == 0 {
-              // We know this is a hard error, because we are outside of all blocks.
-              PResult::Err(NomErr::Failure(Errors::from(ExpectedFound(
-                ExpectedFoundError::new::<_, _, Span>("%}", "%%", l_span.to_span()).into()
-              ))))
-            } else {
-              // This is a soft error that should just end the `fold_many1`.
-              PResult::Err(NomErr::Error(Errors::from(Error::Nom(l_span.to_span(), ErrorKind::Alt))))
-            }
-          },
-        ),
-
-        // Newline that doesn't match any of the above
-        map(line_ending, into_code_block(is_user_code)),
-
-        // Comments and whitespace
-        map(recognize(skip1), into_code_block(is_user_code)),
-
-        // A string which may contain any of the special tokens above
-        map(parse_string, into_code_block(is_user_code)),
-
-        // Arbitrary line of code
-        map(
-          is_not("\n{}"),
-          into_code_block(is_user_code),
-        )
-      )), // end alt
-
-      | i | {
-        if block_level + brace_level == 1 {
-          // Initial value for fold
-          Ok((i, ParsedCode::default()))
-        } else {
-          Err(NomErr::Error(Errors::from(Error::Nom(i.to_span(), ErrorKind::Alt))))
-        }
-      }
-
-    // cond(block_level != 0 || brace_level != 0)
-
-    //
-    // // Initial value for fold
-    // ParsedCode::default(),
-    //
-    // // Accumulate the vector of results into a single `ParsedCodeBlock` for function return value
-    // |mut acc, next| {
-    //   acc.append(next.into());
-    //   acc
-    // },
+    // Only two uses of `make_close_delim_parser`
+    // Closing of a code block which has special meaning
+    map(
+      make_close_delim_parser("\n%}", block_level, is_user_code),
+      into_code_block(is_user_code),
     ),
-    | (mut v, mut p) | {
-      for code in v{
-        p.append(code);
-      }
-      p
-    }
+    // Closing of a braced level
+    map(
+      make_close_delim_parser("}", brace_level, is_user_code),
+      into_code_block(is_user_code),
+    ),
 
-  )(i)
+    // An occurrence of `\n%%` within a block is always an error.
+    preceded(
+      tag("\n%%"),
+      |l_span: InputType| {
+        if is_user_code && block_level == 0 && brace_level == 0 {
+          // We know this is a hard error, because we are outside of all blocks.
+          PResult::Err(NomErr::Failure(Errors::from(ExpectedFound(
+            ExpectedFoundError::new::<_, _, Span>("}", "%%", l_span.to_span()).into()
+          ))))
+        } else if block_level == 0 && brace_level == 0 {
+          // We know this is a hard error, because we are outside of all blocks.
+          PResult::Err(NomErr::Failure(Errors::from(ExpectedFound(
+            ExpectedFoundError::new::<_, _, Span>("%}", "%%", l_span.to_span()).into()
+          ))))
+        } else {
+          // This is a soft error that should just end the `many1`.
+          PResult::Err(NomErr::Error(Errors::from(Error::Nom(l_span.to_span(), ErrorKind::Alt))))
+        }
+      },
+    ),
+
+    // Newline that doesn't match any of the above
+    // map(line_ending, into_code_block(is_user_code)),
+
+    // Comments and whitespace
+    map(recognize(skip1), into_code_block(is_user_code)),
+
+    // A string which may contain any of the special tokens above
+    map(parse_string, into_code_block(is_user_code)),
+
+    // Arbitrary line of code
+    map(
+      is_not("\n{}"),
+      into_code_block(is_user_code),
+    )
+  ))(i)
 }
 
 
