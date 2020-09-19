@@ -7,56 +7,61 @@ use std::io::Read;
 
 use nom::{
   AsChar, branch::alt, bytes::{
-  complete::{
-    escaped,
-    is_a,
-    take_while,
-    is_not,
-    take_until,
-    take_while1,
-    tag,
-  }
-}, character::{
-  complete::{
-    alphanumeric0,
-    alphanumeric1,
-    char as char1,
-    multispace1,
-    newline,
-    none_of,
-    not_line_ending,
-    one_of,
-  },
-  is_alphanumeric,
-}, combinator::{
-  cond,
-  cut,
-  map,
-  map_optc,
-  map_parser,
-  map_res,
-  not,
-  opt,
-  recognize,
-  value,
-}, Compare, Err as NomErr, error::{
-  ErrorKind,
-  ParseError,
-}, IResult as NomResult, multi::{
-  fold_many1,
-  many0,
-  many1,
-  separated_nonempty_list as separated_list1,
-}, sequence::{
-  delimited,
-  pair,
-  preceded,
-  precededc,
-  separated_pair,
-  terminated,
-  tuple,
-}, Slice, InputLength};
+    complete::{
+      escaped,
+      is_a,
+      take_while,
+      is_not,
+      take_until,
+      take_while1,
+      tag,
+    }
+  }, character::{
+    complete::{
+      alphanumeric0,
+      alphanumeric1,
+      char as char1,
+      multispace1,
+      newline,
+      none_of,
+      not_line_ending,
+      one_of,
+    },
+    is_alphanumeric,
+  }, combinator::{
+    cond,
+    cut,
+    map,
+    map_optc,
+    map_parser,
+    map_res,
+    not,
+    opt,
+    recognize,
+    value,
+  }, Compare, Err as NomErr, error::{
+    ErrorKind,
+    ParseError,
+  }, InputLength, IResult as NomResult, multi::{
+    fold_many1,
+    many0,
+    many1,
+    separated_nonempty_list as separated_list1,
+  }, sequence::{
+    delimited,
+    pair,
+    preceded,
+    precededc,
+    separated_pair,
+    terminated,
+    tuple,
+  }, Slice};
+use nom::character::complete::{anychar, line_ending, multispace0};
+use nom::combinator::flat_map;
+use nom::multi::many_till;
 use nom_locate::LocatedSpan;
+use source::*;
+use whitespace::*;
 
 use crate::{
   code::{CodeBlock, ParsedCode},
@@ -67,125 +72,142 @@ use crate::{
     IncorrectDelimError,
     InvalidLabelError,
     UnclosedDelimError,
-    UnexpectedError
+    UnexpectedError,
+    UnexpectedSectionEndError,
   },
   section_items::*,
 };
+use crate::error::Error::{ExpectedFound, IncorrectDelim, InvalidLabel, UnexpectedSectionEnd};
 
-use source::*;
-use whitespace::*;
 use super::*;
-use crate::error::Error::{InvalidLabel, ExpectedFound, IncorrectDelim};
-use nom::character::complete::line_ending;
-use nom::multi::many_till;
-use nom::combinator::flat_map;
 
 // todo: make typedef for Errors
 type InputType<'a> = LSpan<'a>;
 
 // trait Parser<'a>: NomParser<InputType<'a>, InputType<'a>, Errors> {}
 
-pub type Result< 'a>  = NomResult<InputType<'a>, InputType<'a>, Errors>;
+pub type Result<'a> = NomResult<InputType<'a>, InputType<'a>, Errors>;
 pub type PResult<'a> = NomResult<InputType<'a>, ParsedCode, Errors>;
 pub type UResult<'a> = NomResult<InputType<'a>, (), Errors>;
-pub type SResult<'a> = NomResult<InputType<'a>, SectionOneItemSet, Errors>;
+pub type SResult<'a> = NomResult<InputType<'a>, SectionItemSet, Errors>;
 
 
 /// Parses section 1 of the scanner specification file.
 pub fn section_1(i: InputType) -> SResult {
   // Each alternative returns a `SectionOneItemSet` which are folded into each other.
-
   fold_many1(
-
     alt((
       code,
       parse_include,
       /*state, option,*/
-      value(SectionOneItemSet::default(), skip1)
+      value(SectionItemSet::default(), skip1)
     )),
-
-    SectionOneItemSet::default(),
-
-    | mut acc, mut next | {
+    SectionItemSet::default(),
+    |mut acc, mut next| {
       acc.append(&mut next);
       acc
     }
-
   )(i)
+}
+
+/**
+
+Constructs the parser that parses code for `ItemType` `item_type`.
+
+There are five `ItemType`s this applies to:
+```rust
+ItemType::Top
+ItemType::Class
+ItemType::Init
+ItemType::User
+ItemType::Unknown
+```
+*/
+fn make_code_parser(item_type: ItemType) -> impl Fn(InputType) -> SResult {
+  move |input| {
+    match terminated(tag(item_type.open_delimiter()), multispace0)(input) {
+      Ok((rest, delim_span)) => {
+        nested_code(rest, item_type).map_err(
+          |mut result| {
+            match &mut result {
+              NomErr::Failure(errors) => {
+                errors.push(
+                  UnclosedDelimError::new(delim, rest).into()
+                );
+                result
+              }
+
+              Ok((r, item_set))
+              if item_type == ItemType::Unknown => {
+                // This block begins with `{` which is retained.
+                SectionItemSet::insert(item_set, 0, SectionItem::unknown_code(delim_span));
+                (r, item_set)
+              }
+
+              _r => _r
+            } // end match on nested_code(..) error result
+          } // end closure mapped onto nested_code(..) error result
+        ) // call to nested_code
+      } // end Ok branch of match on tag(..)(input)
+
+      _e => _e
+    } // end match on tag(..)(input)
+  } // end outer closure
+}
+
+
+/// Parser code that's common between `code`, which parses the outermost blocks of code, and
+/// `nested_code`, which parses the rest.
+fn parse_code_block() -> impl Fn(InputType) -> SResult {
+  // todo: Where does code within a nested `{.. }` go?
+
+  |input| {
+    alt((
+      // %top{
+      make_code_parser(ItemType::Top),
+
+      // %class{
+      make_code_parser(ItemType::Class),
+
+      // %init{
+      make_code_parser(ItemType::Init),
+
+      // Unlabeled block code within `%{ %}`
+      make_code_parser(ItemType::User),
+
+      // ordinary user code within plain `{ }`
+      make_code_parser(ItemType::Unknown),
+    ))(input)
+  }
 }
 
 
 /**
 Parses line(s) of code as found in `%{ %}`, `%%top`, `%%class`, and `%%init`, returning a
 `SectionOneItemSet`. Assumes the opening delimiter has been parsed.
+
+There is an interesting question of what to do with input that doesn't make sense but that is
+allowed to be in a flex scanner spec. I think we just call it undefined behavior and let the user
+deal with it.
 */
 pub fn code(i: InputType) -> SResult
 {
   alt((
-    // todo: Where does code within a nested `%{.. %}` go?
+    parse_code_block,
 
-    // %top{
-    map(
-      preceded(tag("%top{"),
-        |input| nested_code(input, 0, 1, false)
-      ),
-      |mut parsed| {
-        std::mem::swap(&mut parsed.unknown_code, &mut parsed.top_code);
-        parsed.into()
-      },
-    ),
-
-    // %class{
-    map(
-      preceded(tag("%class{"),
-        |input| nested_code(input, 0, 1, false)
-      ),
-      |mut parsed| {
-        std::mem::swap(&mut parsed.unknown_code, &mut parsed.class_code);
-        parsed.into()
-      },
-    ),
-
-    // %init{
-    map(
-      preceded(tag("%init{"),
-        |input| nested_code(input, 0, 1, false)
-      ),
-      |mut parsed| {
-        std::mem::swap(&mut parsed.unknown_code, &mut parsed.init_code);
-        parsed.into()
-      },
-    ),
-
-    // An unknown labeled code block is an error: `%anythingelse{`
-
-    map_res(  //::<_, _, _, _, E2: Errors, _, _, _>(
-      delimited(char1('%'), alphanumeric1, char1('{')),
+    // An unknown labeled code block is an error: `%anythingelse{`.
+    // todo: Should we parse the block anyway?
+    map_res(
+      terminated(delimited(char1('%'), alphanumeric1, char1('{')), multispace0),
       |l_span: LSpan| {
         let name = l_span.slice(1..l_span.fragment().len() - 2);
         let rest = Some(i.slice((l_span.fragment().len() + 2)..));
-
-        Err(Errors::from(
-          InvalidLabel(
-            InvalidLabelError::new(name, name, rest).into()
-          )
-        ))
-      }
-    ),
-
-    // Unlabeled block code within `%{ %}`
-    map(preceded(tag("%{"),
-        |input| nested_code(input, 0, 1, false)
-      ),
-      |x| x.into()
-    ),
-
-
-    // ordinary user code within plain `{ }`
-    map(preceded(tag("{"),
-        |input| nested_code(input, 1, 0, true)
-      ),
-      |x| x.into()
+        Err(
+          NomErr::Failure(Errors::from(
+            InvalidLabel(InvalidLabelError::new(name, name, rest))
+          ))
+        )
+      },
     ),
   ))(i)
 }
@@ -202,55 +224,180 @@ called to parse. This is easily done with a `swap`:
 This function halts parsing on error.
 */
 // todo: Continue parsing after errors.
-// todo: Parse string literals.
 // todo: Do we have a use for `brace_level` or `block_level`
-pub fn nested_code(i: InputType, mut brace_level: i32, mut block_level: i32, is_user_code: bool)
-                   -> PResult
-{
-  if brace_level + block_level != 1 {
-    // This is not the outer-most level
-    map(
-      many1(
-        |input| parse_section_item(input, brace_level, block_level, is_user_code)
-        /*
-      // | i | {
-      //   if block_level + brace_level == 1 {
-      //     // Initial value for fold
-      //     Ok((i, ParsedCode::default()))
-      //   } else {
-      //     Err(NomErr::Error(Errors::from(Error::Nom(i.to_span(), ErrorKind::Alt))))
-      //   }
-      // }
+pub fn nested_code(i: InputType, item_type: ItemType) -> SResult {
+  let result = // The value of this giant parser
+      many_till(
 
-    // cond(block_level != 0 || brace_level != 0)
+        // Many Section
 
-    //
-    // // Initial value for fold
-    // ParsedCode::default(),
-    //
-    // // Accumulate the vector of results into a single `ParsedCodeBlock` for function return value
-    // |mut acc, next| {
-    //   acc.append(next.into());
-    //   acc
-    // },
+        alt((
 
- */
-      ),
-      |mut v| {
-        v.drain(..).fold(ParsedCode::default(), |mut acc, next| {
-          acc.append(next);
-          acc
-        })
-      }
-    )(i)
+          // %top{
+          parse_code_block,
 
-  } else {
-    // The outer-most level,
-    parse_section_item(i, brace_level, block_level, is_user_code)
+          // A string: "This, }, is a closing brace but does not close a block."
+          map(
+            parse_string,
+            |item_span| SectionItemSet(item_type.new(item_span))
+          ),
+
+          // A character: '}'
+          map(
+            parse_character,
+            |item_span| SectionItemSet(item_type.new(item_span))
+          ),
+
+          // Whitespace and comments
+          map(
+            skip1,
+            |item_span| SectionItemSet(item_type.new(item_span))
+          ),
+
+
+          // Match "safe" characters. This is an optimization so we don't parse a single character at
+          // a time with the next parser below.
+          map(
+            none_of(r#"/\"'%{}"#),
+            |item_span| SectionItemSet(item_type.new(item_span))
+          )
+
+              // Any character not matched above. We use more or less the code for anychar but in a way
+              // that gives an ItemSet(Item(InputType)) result
+              | input: InputType | {
+            let mut it = input.fragment().char_indices();
+            match it.next() {
+
+              // No characters
+              None => Err(NomErr::Error(Errors::from_error_kind(input, ErrorKind::Eof))),
+
+              Some((_rest, _c)) => match it.next() {
+                Some((idx, _)) => Ok((
+                  input.slice(idx..),
+                  SectionItemSet(item_type.new(input.slice(..idx)))
+                )),
+
+                // Just one character remaining.
+                None => Ok((
+                  input.slice(input.input_len()..),
+                  SectionItemSet(item_type.new(input))
+                )),
+              },
+            }
+          }
+        )),
+
+        // Until Section
+        alt((
+
+          // If the wrong closing tag is found.
+          map_res(tag("%}"),
+                  |input| {
+                    match item_type {
+                      | ItemType::Top
+                      | ItemType::Class
+                      | ItemType::Init
+                      | ItemType::User => {
+                        // The ending `%}` is thrown away.
+                        Ok((input, item_type.new(input.slice(0..0))))
+                      }
+
+                      ItemType::Unknown => {
+                        // Always an error.
+                        Err(NomErr::Failure(Errors::from(
+                          ExpectedFoundError::new("}", "%}", input).into()
+                        )))
+                      }
+
+                      _t => {
+                        unreachable!(
+                          "Impossible internal state: parsing {} inside a nested code block.",
+                          _t
+                        )
+                      }
+                    }
+                  }
+          ),
+
+          // A closing brace. Make sure it matches.
+          map_res(tag("}"),
+                  |input| {
+                    match item_type {
+                      | ItemType::Top
+                      | ItemType::Class
+                      | ItemType::Init
+                      | ItemType::User => {
+                        // Always an error.
+                        Err(NomErr::Failure(Errors::from(
+                          ExpectedFoundError::new("%}", "}", input).into()
+                        )))
+                      }
+
+                      ItemType::Unknown => {
+                        // Do not throw away the `}`
+                        Ok((input.slice(1..1), item_type.new(input)))
+                      }
+
+                      _t => {
+                        unreachable!(
+                          "Impossible internal state: parsing {} inside a nested code block.",
+                          _t
+                        )
+                      }
+                    }
+                  }
+          ),
+
+          // section separator, always an error.
+          preceded(
+            tag("%%"),
+            |input: InputType| {
+              // Always an error.
+              Err(NomErr::Failure(Errors::from(
+                UnexpectedSectionEndError::new(Vec::<LSpan>::default(), input).into()
+              )))
+            }
+          ),
+        )) // end alt
+      )(i);
+
+  // todo: This match is only for destructuring? Or do I need other branches?
+  match result {
+    // (Err(e), _) => Err(e),
+
+    (rest, (mut item_sets, mut close_delim_item)) => {
+      // Consolidate parsed value
+      let item_set = item_sets.iter_mut().fold(
+        SectionItemSet::default(),
+        |mut acc, mut next| {
+          acc.merged(next)
+        }
+      );
+      Ok((rest, merge_or_append_items(item_set, close_delim_item)))
+    }
+
+    _ => {
+      unreachable!("IUnreachable internal state: `many_till`'s result always contains a result.")
+    }
   }
 }
 
-fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, is_user_code: bool) -> PResult{
+
+/**
+A character. We do the easiest possible thing and parse until the next `'`, only handling the
+special case of an escaped `'` or `\\`, as in `'\''`.
+*/
+fn parse_character(i: InputType) -> Result {
+  recognize(delimited(
+    tag("'"),
+    escaped(none_of("'\\"), '\\', one_of("'\\")),
+    tag("'")
+  ))
+}
+
+
+/*
+fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, is_user_code: bool) -> PResult {
   // region Local helper functions
 
   // Local helper function to keep DRY. (FIVE functions, four closures, three closures deep
@@ -273,11 +420,9 @@ fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, 
           }
           let mut result = nested_code(l_span, brace, block, user_code);
           match result {
-
             Err(NomErr::Failure(ref mut errors)) => {
               let inner_e = errors.last().unwrap();
               match inner_e {
-
                 Error::UnclosedDelim(ref mut ude) => {
                   ude.unclosed_delims.push(input.slice(..open_delim.len()).to_span());
                   // errors.push(Error::UnclosedDelim(ude));
@@ -291,12 +436,10 @@ fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, 
                 }
 
                 _e => { /* pass */ }
-
               }
             }
 
             ref _r => { /* pass */ }
-
           }
           result
         },
@@ -311,7 +454,6 @@ fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, 
     move |input| {
       preceded(tag(close_delim),
                |mut l_span: InputType| {
-
                  /*
 
                 Since `level` is decremented  by virtue of returning from `nested_code`, there
@@ -425,7 +567,7 @@ fn parse_section_item(i: InputType, mut brace_level: i32, mut block_level: i32, 
   ))(i)
 }
 
-
+*/
 /**
 Parses a filename which is either a sequence of non-whitespace characters terminated by
 whitespace or EOF or a quoted string.
@@ -490,7 +632,7 @@ fn parse_string(i: InputType) -> Result {
   recognize(preceded(
     char1('"'),
     cut(terminated(
-      escaped(none_of(r#"\""#), '\\', one_of(r#""\/bfnrtu"#)),
+      escaped(none_of("\"\\"), '\\', one_of("\"\\")),
       char1('"'),
     )),
   ))(i)
@@ -508,4 +650,29 @@ fn parse_name(i: InputType) -> NomResult<InputType, String, Errors> {
       l_span.to_string().replace("-", "_")
     }
   )(i)
+}
+
+fn merge_or_append_items(mut items: SectionItemSet, mut item: SectionItem)
+                         -> SectionItemSet
+{
+  if items.is_empty() {
+    items.push(item);
+    return items;
+  }
+
+  // Unwrap always succeeds because of preceding `if`.
+  let result = items.last_mut().unwrap().merged(item);
+
+  match result {
+    Merged::Yes(i) => {
+      items.push(i);
+    }
+
+    Merged::No(first, second) => {
+      items.push(first);
+      items.push(second);
+    }
+  }
+
+  items
 }

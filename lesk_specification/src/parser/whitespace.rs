@@ -82,8 +82,6 @@ pub type UResult<'a> = NomResult<InputType<'a>, (), Errors>;
 
 
 
-
-
 // region Nom Whitespace
 
 /// Noms surrounding whitespace, including newlines, comments, and empty strings, returning the

@@ -11,8 +11,8 @@ use crate::parser::ToSpan;
 /// Error that occurs when at least one delimited span was left unclosed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnclosedDelimError {
-    /// Locations of open delimiters that lack a matching close delimiter.
-    pub unclosed_delims: Vec<Span>,
+    /// Location of open delimiter that lacks a matching close delimiter.
+    pub unclosed_delimiter: Span,
     /// Span pointing to the end of the file.
     pub eof_span: Span,
 }
@@ -25,7 +25,7 @@ impl UnclosedDelimError {
         S2: ToSpan,
     {
         UnclosedDelimError {
-            unclosed_delims: delims.into_iter().map(|span| span.to_span()).collect(),
+            unclosed_delimiter: delims.into_iter().map(|span| span.to_span()).collect(),
             eof_span: eof_span.to_span(),
         }
     }
@@ -46,7 +46,7 @@ impl ToDiagnostic for UnclosedDelimError {
         let mut diagnostic =
             Diagnostic::error().with_message(self.to_string()).with_labels(vec![primary]);
 
-        for span in &self.unclosed_delims {
+        for span in &self.unclosed_delimiter {
             let unclosed = Label::secondary(file, *span).with_message("unmatched delimiter");
             diagnostic.labels.push(unclosed);
         }

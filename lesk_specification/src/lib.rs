@@ -11,6 +11,7 @@ mod error;
 mod parser;
 mod code;
 mod section_items;
+mod mergable;
 
 use std::collections::{HashMap, HashSet};
 

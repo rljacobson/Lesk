@@ -2,6 +2,13 @@
 
 // todo: Factor out generic bits to a module at the library root level.
 
+mod expected_found;
+mod incorrect_delim;
+mod unclosed_delim;
+mod unexpected;
+mod invalid_label;
+mod unexpected_section_end;
+
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::iter::FromIterator;
@@ -17,13 +24,8 @@ pub use self::incorrect_delim::IncorrectDelimError;
 pub use self::unclosed_delim::UnclosedDelimError;
 pub use self::unexpected::UnexpectedError;
 pub use self::invalid_label::InvalidLabelError;
+pub use self::unexpected_section_end::UnexpectedSectionEndError;
 use crate::parser::ToSpan;
-
-mod expected_found;
-mod incorrect_delim;
-mod unclosed_delim;
-mod unexpected;
-mod invalid_label;
 
 // todo: update the examples to match new `codespan_reporting` version.
 /// Trait for converting error types to pretty-printable diagnostics.
@@ -335,13 +337,14 @@ pub enum Error {
     ExpectedFound(ExpectedFoundError),
     /// An incorrect closing delimiter was specified.
     IncorrectDelim(IncorrectDelimError),
-
     /// An invalid label was given for a code block.
     InvalidLabel(InvalidLabelError),
     /// At least one delimited span was left unclosed.
     UnclosedDelim(UnclosedDelimError),
     /// An unexpected token was found.
     Unexpected(UnexpectedError),
+    /// The section ended inside a code block.
+    UnexpectedSectionEnd(UnexpectedSectionEndError),
     /// A custom error with a span and message.
     Message(Span, Cow<'static, str>),
     /// A [`nom`] parse error occurred.
@@ -361,6 +364,7 @@ impl Display for Error {
             Error::IncorrectDelim(ref e) => write!(fmt, "{}", e),
             Error::UnclosedDelim(ref e) => write!(fmt, "{}", e),
             Error::Unexpected(ref e) => write!(fmt, "{}", e),
+            Error::UnexpectedSectionEnd(ref e) => write!(fmt, "{}", e),
             Error::InvalidLabel(ref e) => write!(fmt, "{}", e),
             Error::Message(_, ref e) => write!(fmt, "{}", e),
             Error::Nom(_, ref e) => write!(fmt, "nom error: {:?}", e),
@@ -382,6 +386,12 @@ impl From<IncorrectDelimError> for Error {
     }
 }
 
+impl From<InvalidLabelError> for Error {
+    fn from(error: InvalidLabelError) -> Self {
+        Error::InvalidLabel(error)
+    }
+}
+
 impl From<UnclosedDelimError> for Error {
     fn from(error: UnclosedDelimError) -> Self {
         Error::UnclosedDelim(error)
@@ -394,9 +404,9 @@ impl From<UnexpectedError> for Error {
     }
 }
 
-impl From<InvalidLabelError> for Error {
-    fn from(error: InvalidLabelError) -> Self {
-        Error::InvalidLabel(error)
+impl From<UnexpectedSectionEndError> for Error {
+    fn from(error: UnexpectedSectionEndError) -> Self {
+        Error::UnexpectedSectionEnd(error)
     }
 }
 
@@ -405,8 +415,10 @@ impl ToDiagnostic for Error {
         match *self {
             Error::ExpectedFound(ref e) => e.to_diagnostic(file),
             Error::IncorrectDelim(ref e) => e.to_diagnostic(file),
+            Error::InvalidLabel(ref e) => e.to_diagnostic(file),
             Error::UnclosedDelim(ref e) => e.to_diagnostic(file),
             Error::Unexpected(ref e) => e.to_diagnostic(file),
+            Error::UnexpectedSectionEnd(ref e) => e.to_diagnostic(file),
             Error::Message(ref span, ref msg) => {
                 let label = Label::primary(file, *span).with_message(msg.clone());
 
@@ -422,7 +434,7 @@ impl ToDiagnostic for Error {
                                  .with_labels(vec![label])
                                  .with_notes(vec![note])
             }
-            Error::InvalidLabel(ref e) => e.to_diagnostic(file)
+
         }
     }
 }

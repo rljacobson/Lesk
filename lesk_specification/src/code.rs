@@ -1,69 +1,37 @@
+#![allow(unused_code)]
 /*!
 # A hierarchy of representations of code structures.
 */
 
+use std::fmt::Display;
+
+use nom::lib::std::fmt::Formatter; // An enum defined below.
+
 use crate::Code;
 use crate::options::OptionSet;
-use crate::parser::{LSpan, ToSpan, Span};
-use crate::section_items::{SectionOneItem, SectionOneItemSet};
+use crate::parser::{
+  LSpan,
+  ToSpan,
+  Span
+};
+use crate::section_items::{
+  SectionItem,
+  SectionItemSet
+};
 
-use CodeBlock::*; // An enum defined below.
+use CodeBlock::*;  // An enum defined below.
 
-
-impl From<CodeBlock> for SectionOneItem {
+impl From<CodeBlock> for SectionItem {
   fn from(code_block: CodeBlock) -> Self {
     match code_block {
-      CodeBlock::User(codes) => SectionOneItem::User(codes),
-      CodeBlock::Top(codes) => SectionOneItem::Top(codes),
-      CodeBlock::Class(codes) => SectionOneItem::Class(codes),
-      CodeBlock::Init(codes) => SectionOneItem::Init(codes),
-      CodeBlock::Unknown(codes) => SectionOneItem::Unknown(codes),
+      CodeBlock::User(codes) => SectionItem::User(codes),
+      CodeBlock::Top(codes) => SectionItem::Top(codes),
+      CodeBlock::Class(codes) => SectionItem::Class(codes),
+      CodeBlock::Init(codes) => SectionItem::Init(codes),
+      CodeBlock::Unknown(codes) => SectionItem::Unknown(codes),
     }
   }
 }
-
-/*
-impl SectionOneItem{
-  pub fn merge(&mut self, rhs: SectionOneItem){
-    if self.variant() != rhs.variant(){
-      panic!("Cannot merge section item varians {} and {}.", self.variant(), rhs.variant());
-    }
-
-    match self {
-      SectionOneItem::Code(pcb) => {
-        let SectionOneItem::Code(other_pcb) = rhs;
-        pcb.append(other_pcb);
-      },
-      SectionOneItem::Include {
-        file,
-        contents,
-      },
-      SectionOneItem::State {
-        is_exclusive,
-        code,
-      },
-      SectionOneItem::Options(os),
-    }
-
-  }
-
-  pub fn variant(&self) -> SectionOneItemName {
-    match self {
-      SectionOneItem::Code(_) => SectionOneItemName::Code,
-      SectionOneItem::Include{..} => SectionOneItemName::Include,
-      SectionOneItem::State{..} => SectionOneItemName::State,
-      SectionOneItem::Options(_) => SectionOneItemName::Options,
-    }
-  }
-}
-
-pub enum SectionOneItemName {
-  Code,
-  Include,
-  State,
-  Options,
-}
-*/
 
 #[derive(Default, Clone, Debug)]
 pub struct ParsedCode {
@@ -151,9 +119,9 @@ impl ParsedCode {
   }
 }
 
-impl From<ParsedCode> for SectionOneItemSet {
+impl From<ParsedCode> for SectionItemSet {
   fn from(parsed_code: ParsedCode) -> Self {
-    let mut result = SectionOneItemSet::default();
+    let mut result = SectionItemSet::default();
 
     if !parsed_code.user_code.is_empty() {
       result.push(User(parsed_code.user_code).into());
@@ -174,6 +142,47 @@ impl From<ParsedCode> for SectionOneItemSet {
     result
   }
 }
+
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+pub enum CodeBlockType {
+  User,
+  Top,
+  Class,
+  Init,
+  Unknown,
+}
+
+impl Display for CodeBlockType{
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    let name = match self {
+      User => "User",
+      Top => "Top",
+      Class => "Class",
+      Init => "Init",
+      Unknown => "Unknown",
+    };
+
+    write!(f, "{}", name)
+  }
+}
+
+impl CodeBlockType {
+  pub fn open_delimiter(&self) -> &'static str{
+    match self {
+      Top => "%top{",
+      Class => "%class{",
+      Init => "%init{",
+      User => "%{",
+      Unknown => "{",
+    }
+  }
+
+  // For symmetry with `open_delimiter`
+  pub fn close_delimiter(&self) -> &'static str {
+    "}"
+  }
+}
+
 
 #[derive(Clone)]
 pub enum CodeBlock {
@@ -217,7 +226,7 @@ impl CodeBlock {
     }
   }
 
-  pub fn into_codes(self) -> Code {
+  pub fn into_code(self) -> Code {
     match self {
       | User(code)
       | Top(code)
@@ -227,3 +236,4 @@ impl CodeBlock {
     }
   }
 }
+

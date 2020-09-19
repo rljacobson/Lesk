@@ -6,6 +6,8 @@ use nom::{Slice, Offset};
 
 pub type LSpan<'a> = nom_locate::LocatedSpan<&'a str>;
 
+pub use crate::mergable::*;
+
 
 pub trait HasSpan {
   fn span(&self) -> Span;
