@@ -10,11 +10,24 @@ A trait for structs that can determine if they can be merged with each other.
 use codespan::Span;
 use std::cmp::{min, max};
 use nom_locate::LocatedSpan;
+use std::fmt::{Display, Debug};
+use nom::Offset;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Merged<T, U> {
   Yes(T),
   No(U, U)
+}
+
+impl<T, U> Merged<T, U> {
+  pub fn unwrap(self) -> T {
+    match self {
+      Merged::Yes(t) => t,
+      Merged::No(_, _) => {
+        panic!("Attempted to unwrap a Merged::No(T, U).");
+      }
+    }
+  }
 }
 
 pub trait Mergable {
@@ -26,9 +39,9 @@ pub trait Mergable {
     This is NOT `codespan::Span::disjoint()` (nor is it it's negation). Disjoint spans are
     mergable is they are adjacent: the intervals [a, b) and [b, c) are mergable but disjoint. .
   */
-  fn mergable(&self, &other: Self) -> bool;
+  fn mergable(&self, other: &Self) -> bool;
 
-  /*
+  /*›
     Attempts to merge self and other, producing `Merged::Yes(Self)` if successful and
     `Merged::No(Self, Self)` if failure. The result type is actually generic, so you can re-place
     `Self` in the results with, say, `&mut Self`.
@@ -37,13 +50,15 @@ pub trait Mergable {
     either overlap or to be adjacent (`first.end()==second.begin()`) and produces the union of
     the two spans. Neither are true of `codespan::Span::merge()`.
   */
-  fn merged<T, U>(&mut self, other: &mut Self) -> Merged<T, U>;
+  fn merged<'a>(&'a  mut self, other: &'a  mut Self) -> Merged<&'a mut Self, &'a mut Self>
+    where Self: std::marker::Sized;
 
 }
 
 
 /// This `impl` does not check that the spans are from the same source.
 impl Mergable for Span {
+
   fn mergable(&self, other: &Self) -> bool {
     // `first` is the span whose start is encountered first along the number line.
     let (first, second) = if self.start() <= other.start() {
@@ -63,12 +78,114 @@ impl Mergable for Span {
     second.start() <= first.end()
   }
 
-  fn merged(&mut self, other: &mut Self) -> Merged<Self, &mut Self> {
-    if self.mergable(other){
-      Merged::Yes(Span::new(min(self.start(), other.start()), max(self.end(), other.end())))
+  fn merged<'a>(&'a mut self, other: &'a mut Self) -> Merged<&'a mut Self, &'a mut Self> {
+    if self.mergable(&other){
+      // The tablecloth trick: we pull `self` right out from beneath us.
+      let mut merged_span = self.merge(*other);
+      std::mem::swap(&mut merged_span, self);
+      Merged::Yes(self)
     } else{
-      Merged::No(self, other);
+      Merged::No(self, other)
     }
   }
+
 }
 
+/*
+impl Mergable for LocatedSpan<T>{
+
+
+  fn mergable(&self, other: &Self) -> bool {
+    // See `merged()` for `Span` for an explaination of why this works.
+    let (first, second) = if self.location_offset() < other.location_offset() {
+      (self, other)
+    } else {
+      (other, self)
+    };
+
+    second.start() <= first.location_offset() + first.len()
+  }
+
+  fn merged<'a>(&'a mut self, other: &'a mut Self) -> Merged<&'a mut Self, &'a mut Self> {
+    // See `merged()` for `Span` for an explaination of why this works.
+    if self.mergable(&other){
+      // The tablecloth trick: we pull `self` right out from beneath us.
+      self.fragment().spl
+
+
+      let mut merged_span = self.merge(other);
+      std::mem::swap(&mut merged_span, self);
+      Merged::Yes(self)
+    } else{
+      Merged::No(self, other)
+    }
+
+  }
+
+}
+
+*/
+
+pub fn merge_or_push_item<T>(items: &mut Vec<T>, mut item: T) -> &mut Vec<T>
+  where T: Mergable + Display
+{
+  if items.is_empty() {
+    // println!("Empty items while trying to merge with {}", item);
+    items.push(item);
+    return items;
+  }
+
+  // Unwrap always succeeds because of preceding `if`.
+  let mut last_item = items.pop().unwrap();
+  print!("Attempting merge of {} and {}... ", last_item, item);
+
+  let mut result = last_item.merged(&mut item);
+
+  match result {
+    Merged::Yes(_) => {
+      println!("Success: {}", last_item);
+      items.push(last_item);
+    }
+
+    Merged::No(_, _) => {
+      println!("failed.");
+      items.push(last_item);
+      items.push(item);
+    }
+  }
+
+  items
+}
+
+
+pub fn merge_or_append_items<'a, T>(lhs: &'a mut Vec<T>, rhs: &'a mut Vec<T>) -> &'a mut Vec<T>
+  where T: Mergable + Debug + Display
+{
+  if lhs.is_empty() {
+    // println!("Empty lhs while trying to merge rhs={:?}", rhs);
+    std::mem::swap(lhs, rhs);
+    return lhs;
+  } else if rhs.is_empty() {
+    // println!("Empty rhs while trying to merge lhs={:?}", lhs);
+    std::mem::swap(lhs, rhs);
+    return lhs;
+  }
+
+  // Unwraps always succeed because of preceding `if` block.
+  let mut lhs_last_item  = lhs.pop().unwrap();
+  let mut rhs_first_item = rhs.first_mut().unwrap();
+  // println!("Attempting to merge {:?} with {:?}", lhs_last_item, rhs_first_item);
+  match lhs_last_item.merged(rhs_first_item) {
+    Merged::No(_, _) => {
+      lhs.push(lhs_last_item); // Unpop
+      // Can still "merge" the vectors
+      lhs.append(rhs);
+    }
+
+    Merged::Yes(_) => {
+      lhs.push(lhs_last_item);
+      lhs.extend(rhs.drain(1..));
+    }
+  }
+  lhs
+}

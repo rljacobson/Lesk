@@ -1,3 +1,4 @@
+#![feature(iterator_fold_self)]
 /*!
 
 Utilities to parse a lexer specification file and create an abstract representation of the files
@@ -9,7 +10,7 @@ mod options;
 mod specification;
 mod error;
 mod parser;
-mod code;
+// mod code;
 mod section_items;
 mod mergable;
 

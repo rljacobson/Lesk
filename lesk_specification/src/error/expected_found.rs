@@ -1,6 +1,5 @@
 //! Expected/found error data structure.
 
-use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 

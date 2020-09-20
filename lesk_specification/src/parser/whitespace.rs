@@ -63,7 +63,6 @@ use nom::{
 use nom_locate::LocatedSpan;
 
 use crate::{
-  code::{CodeBlock, ParsedCode},
   error::Errors,
   section_items::*,
 };
@@ -74,10 +73,7 @@ use super::*;
 // todo: make typedef for Errors
 type InputType<'a> = LSpan<'a>;
 
-// trait Parser<'a>: NomParser<InputType<'a>, InputType<'a>, Errors> {}
-
 pub type Result<'a> = NomResult<InputType<'a>, InputType<'a>, Errors>;
-pub type PResult<'a> = NomResult<InputType<'a>, ParsedCode, Errors>;
 pub type UResult<'a> = NomResult<InputType<'a>, (), Errors>;
 
 

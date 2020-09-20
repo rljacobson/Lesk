@@ -37,7 +37,7 @@ impl<'a, T: ToSpan> ToSpan for &'a T {
 
 impl<'a> ToSpan for LSpan<'a> {
   fn to_span(&self) -> Span {
-    let start = self.offset( &self.slice(self.fragment().len()..)  );
+    let start = self.location_offset();
     let end = start + self.fragment().len();
     Span::new(start as u32, end as u32)
   }

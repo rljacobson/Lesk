@@ -6,9 +6,9 @@ use std::fmt::Display;
 
 use nom::lib::std::fmt::Formatter;
 
-use crate::mergable::{Mergable, Merged};
+use crate::mergable::{Mergable, Merged, merge_or_append_items, merge_or_push_item};
 use crate::options::OptionSet;
-use crate::parser::Span;
+use crate::parser::{Span, ToSpan};
 
 use super::{Code, SourceFile};
 
@@ -24,20 +24,59 @@ pub enum ItemType {
   Options,
 }
 
+impl Display for ItemType{
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    let name =
+        match self {
+          ItemType::Top => "ItemType::Top",
+          ItemType::Class => "ItemType::Class",
+          ItemType::Init => "ItemType::Init",
+          ItemType::User => "ItemType::User",
+          ItemType::Unknown => "ItemType::Unknown",
+          ItemType::Include => "ItemType::Include",
+          ItemType::Options => "ItemType::Options",
+          ItemType::State => "ItemType::State",
+        };
+
+    write!(f, "{}", name)
+  }
+}
+
 impl ItemType {
-  pub fn new(&self, item: span) -> SectionItem {
+  pub fn new<S>(&self, item: S) -> SectionItem
+      where S: ToSpan
+  {
     match self {
-      ItemType::Top => SectionItem::top_code(item),
-      ItemType::Class => SectionItem::class_code(item),
-      ItemType::Init => SectionItem::init_code(item),
-      ItemType::User => SectionItem::user_code(item),
-      ItemType::Unknown => SectionItem::unknown_code(item),
+      ItemType::Top => SectionItem::top_code(item.to_span()),
+      ItemType::Class => SectionItem::class_code(item.to_span()),
+      ItemType::Init => SectionItem::init_code(item.to_span()),
+      ItemType::User => SectionItem::user_code(item.to_span()),
+      ItemType::Unknown => SectionItem::unknown_code(item.to_span()),
+
       _ => {
         unreachable!("Cannot use ItemType::new to create an Options, Include, or State.");
       }
       // ItemType::Options => SectionItem::options_code(item),
       // ItemType::Include => SectionItem::Include(item),
       // ItemType::State => SectionItem::State(item)
+    }
+  }
+
+  pub fn from_span(&self, code: Span) -> SectionItem {
+    match self {
+      ItemType::Top => SectionItem::User(code),
+      ItemType::Class => SectionItem::Top(code),
+      ItemType::Init => SectionItem::Class(code),
+      ItemType::User => SectionItem::Init(code),
+      ItemType::Unknown => SectionItem::Unknown(code),
+
+      _ => {
+        unreachable!("Cannot use ItemType::from_code to create an Options, Include, or State.");
+      }
+
+
+
+
     }
   }
 
@@ -78,8 +117,9 @@ impl ItemType {
       | ItemType::Top
       | ItemType::Class
       | ItemType::Init
-      | ItemType::User
       | ItemType::Unknown => "}",
+
+      ItemType::User => "%}",
 
       | ItemType::Include
       | ItemType::Options
@@ -92,18 +132,18 @@ pub type SectionItemSet = Vec<SectionItem>;
 
 #[derive(Clone, Debug)]
 pub enum SectionItem {
-  User(Code),
-  Top(Code),
-  Class(Code),
-  Init(Code),
-  Unknown(Code),
+  User(Span),
+  Top(Span),
+  Class(Span),
+  Init(Span),
+  Unknown(Span),
   Include {
     file: SourceFile,
     contents: SectionItemSet,
   },
   State {
     is_exclusive: bool,
-    code: Code,
+    code: Span,
   },
   Options(OptionSet),
 }
@@ -113,25 +153,25 @@ impl Display for SectionItem {
     let text =
         match self {
           SectionItem::User(code) => {
-            format!("User({:?})\n", code)
+            format!("User({:?})", code)
           }
           SectionItem::Top(code) => {
-            format!("Top({:?})\n", code)
+            format!("Top({:?})", code)
           }
           SectionItem::Class(code) => {
-            format!("Class({:?})\n", code)
+            format!("Class({:?})", code)
           }
           SectionItem::Init(code) => {
-            format!("Init({:?})\n", code)
+            format!("Init({:?})", code)
           }
           SectionItem::Unknown(code) => {
-            format!("Unknown({:?})\n", code)
+            format!("Unknown({:?})", code)
           }
           SectionItem::Include {
             file,
             contents,
           } => {
-            format!("Include{{ file={:?} }}\n", file.name())
+            format!("Include{{ file={:?} }}", file.name())
           }
           SectionItem::State {
             is_exclusive,
@@ -140,7 +180,7 @@ impl Display for SectionItem {
             format!("State{{is_exlusive: {:?}, code={:?} }}", is_exclusive, code)
           }
           SectionItem::Options(option_set) => {
-            format!("Options:\n{:?}\n", option_set)
+            format!("Options:\n{:?}", option_set)
           }
         };
 
@@ -149,34 +189,24 @@ impl Display for SectionItem {
 }
 
 impl SectionItem {
-  pub fn user_code<S>(span: S) -> Self
-    where S: Into<Span>
-  {
-    SectionItem::User(vec![span])
+  pub fn user_code<S: ToSpan>(span: S) -> Self {
+    SectionItem::User(span.to_span())
   }
 
-  pub fn top_code<S>(span: S) -> Self
-    where S: Into<Span>
-  {
-    SectionItem::Top(vec![span])
+  pub fn top_code<S: ToSpan>(span: S) -> Self {
+    SectionItem::Top(span.to_span())
   }
 
-  pub fn class_code<S>(span: S) -> Self
-    where S: Into<Span>
-  {
-    SectionItem::Class(vec![span])
+  pub fn class_code<S: ToSpan>(span: S) -> Self {
+    SectionItem::Class(span.to_span())
   }
 
-  pub fn init_code<S>(span: S) -> Self
-    where S: Into<Span>
-  {
-    SectionItem::Init(vec![span])
+  pub fn init_code<S: ToSpan>(span: S) -> Self {
+    SectionItem::Init(span.to_span())
   }
 
-  pub fn unknown_code<S>(span: S) -> Self
-    where S: Into<Span>
-  {
-    SectionItem::Unknown(vec![span])
+  pub fn unknown_code<S: ToSpan>(span: S) -> Self {
+    SectionItem::Unknown(span.to_span())
   }
 
   // Supplies the `ItemType` variant associated to this `SectionItem`.
@@ -206,6 +236,7 @@ impl SectionItem {
     self.item_type().close_delimiter()
   }
 
+  /*
   // Pushes a `span` onto the `code` vector when `self` is a code-wrapping `SectionOneItem`.
   // Panics otherwise.
   pub fn push_code<S>(&mut self, span: S)
@@ -227,25 +258,9 @@ impl SectionItem {
       }
     }
   }
+*/
 
-  pub fn into_code(self) -> Code {
-    match self {
-      | SectionItem::User(code)
-      | SectionItem::Top(code)
-      | SectionItem::Class(code)
-      | SectionItem::Init(code)
-      | SectionItem::State { code, .. }
-      | SectionItem::Unknown(code) => code,
-
-      | SectionItem::Include { .. }
-      | SectionItem::Options(_) => {
-        panic!("Tried to turn {} into code.", self);
-      }
-    }
-  }
-
-
-  pub fn get_code(&mut self) -> Option<&mut Code> {
+  pub fn get_code(&mut self) -> Option<&mut Span> {
     match self {
       | SectionItem::User(code)
       | SectionItem::Top(code)
@@ -263,11 +278,32 @@ impl SectionItem {
 }
 
 
+impl ToSpan for SectionItem {
+  fn to_span(&self) -> Span {
+    match self {
+      | SectionItem::User(code)
+      | SectionItem::Top(code)
+      | SectionItem::Class(code)
+      | SectionItem::Init(code)
+      | SectionItem::State { code, .. }
+      | SectionItem::Unknown(code) => *code,
+
+      | SectionItem::Include { .. }
+      | SectionItem::Options(_) => {
+        panic!("Tried to turn {} into code.", self);
+      }
+    }
+  }
+}
+
+
 impl Mergable for SectionItem {
 
 
   fn mergable(&self, other: &SectionItem) -> bool {
-    (self.item_type() == other.item_type()) && self.is_code()
+
+    self.item_type() == other.item_type() || self.item_type().is_code() &&
+        other.item_type() == ItemType::Unknown
   }
 
 
@@ -275,45 +311,27 @@ impl Mergable for SectionItem {
   Attempts tp merge `self` with `other`. This method is asymmetric: it assumes `self` was parsed
   before `other`.
   */
-  fn merged(mut self, mut other: SectionItem) -> Merged<SectionItem, SectionItem> {
-    if self.item_type() == other.item_type() {
-      match &mut self {
+  fn merged<'a>(&'a mut self, other: &'a mut  SectionItem)
+      -> Merged<&'a mut SectionItem, &'a mut SectionItem>
+  {
+    if self.item_type() == other.item_type() || self.item_type().is_code() && other.item_type()
+        == ItemType::Unknown {
+      match self {
         | SectionItem::User(self_code)
         | SectionItem::Top(self_code)
         | SectionItem::Class(self_code)
         | SectionItem::Init(self_code)
         | SectionItem::Unknown(self_code)
         => {
-          // Unwrap always succeeds because of very first `if` above.
+          // Unwrap always succeeds because of outer `if`.
           let other_code = other.get_code().unwrap();
+          self_code.merged(other_code);
 
-          if self_code.is_empty() {
-            return Merged::Yes(other);
-          } else if other_code.is_empty() {
-            return Merged::Yes(self);
-          }
-
-          // Unwraps always succeed because of preceding `is` block.
-          let mut self_last_span = self_code.last_mut().unwrap();
-          let mut other_first_span = other_code.first_mut().unwrap();
-          match self_last_span.merged(other_first_span) {
-            Merged::No(_, _) => {
-              // Can still "merge" the vectors
-              self_code.append(other_code);
-              Merged::Yes(self)
-            }
-
-            Merged::Yes(merged) => {
-              self_code.pop();
-              self_code.push(merged);
-              self_code.extend(other_code.drain(1..));
-              Merged::Yes(self)
-            }
-          }
+          Merged::Yes(self)
         }
 
-        | SectionItem::State
-        | SectionItem::Include
+        | SectionItem::State{..}
+        | SectionItem::Include{..}
         | SectionItem::Options(_) => Merged::No(self, other)
 
       } // end match self

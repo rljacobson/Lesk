@@ -155,11 +155,11 @@ pub enum CodeBlockType {
 impl Display for CodeBlockType{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     let name = match self {
-      User => "User",
-      Top => "Top",
-      Class => "Class",
-      Init => "Init",
-      Unknown => "Unknown",
+      CodeBlockType::User => "User",
+      CodeBlockType::Top => "Top",
+      CodeBlockType::Class => "Class",
+      CodeBlockType::Init => "Init",
+      CodeBlockType::Unknown => "Unknown",
     };
 
     write!(f, "{}", name)
@@ -169,11 +169,11 @@ impl Display for CodeBlockType{
 impl CodeBlockType {
   pub fn open_delimiter(&self) -> &'static str{
     match self {
-      Top => "%top{",
-      Class => "%class{",
-      Init => "%init{",
-      User => "%{",
-      Unknown => "{",
+      CodeBlockType::Top => "%top{",
+      CodeBlockType::Class => "%class{",
+      CodeBlockType::Init => "%init{",
+      CodeBlockType::User => "%{",
+      CodeBlockType::Unknown => "{",
     }
   }
 

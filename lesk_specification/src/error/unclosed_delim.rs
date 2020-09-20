@@ -19,13 +19,13 @@ pub struct UnclosedDelimError {
 
 impl UnclosedDelimError {
     /// Constructs a new `UnclosedDelimError`.
-    pub fn new<S1, S2>(delims: Vec<S1>, eof_span: S2) -> Self
+    pub fn new<S1, S2>(delim: S1, eof_span: S2) -> Self
     where
         S1: ToSpan,
         S2: ToSpan,
     {
         UnclosedDelimError {
-            unclosed_delimiter: delims.into_iter().map(|span| span.to_span()).collect(),
+            unclosed_delimiter: delim.to_span(),
             eof_span: eof_span.to_span(),
         }
     }
@@ -46,10 +46,8 @@ impl ToDiagnostic for UnclosedDelimError {
         let mut diagnostic =
             Diagnostic::error().with_message(self.to_string()).with_labels(vec![primary]);
 
-        for span in &self.unclosed_delimiter {
-            let unclosed = Label::secondary(file, *span).with_message("unmatched delimiter");
-            diagnostic.labels.push(unclosed);
-        }
+        let unclosed = Label::secondary(file, self.unclosed_delimiter).with_message("unmatched delimiter");
+        diagnostic.labels.push(unclosed);
 
         diagnostic
     }
