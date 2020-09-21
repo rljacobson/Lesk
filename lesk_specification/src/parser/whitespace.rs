@@ -88,9 +88,9 @@ pub fn ws<'a, F, O, E>(inner: F) -> impl Fn(InputType<'a>) -> NomResult<InputTyp
       E: ParseError<InputType<'a>>
 {
   delimited::<InputType<'a>, (), O, (), E, _, _, _>(
-    skip,
+    skip0,
     inner,
-    skip,
+    skip0,
   )
 }
 
@@ -102,7 +102,7 @@ pub fn wst<'a, O, F, E>(inner: F) -> impl Fn(InputType<'a>) -> NomResult<InputTy
 {
   terminated(
     inner,
-    skip,
+    skip0,
   )
 }
 
@@ -119,7 +119,7 @@ pub fn wst1<'a, O, F, E>(inner: F) -> impl Fn(InputType<'a>) -> NomResult<InputT
 }
 
 /// Noms whitespace, including newlines and comments, returning `()`.
-pub fn skip<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>) -> NomResult<InputType<'a>, (), E>
+pub fn skip0<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>) -> NomResult<InputType<'a>, (), E>
 {
   value(
     (),
@@ -139,6 +139,33 @@ pub fn skip1<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>) -> NomResult<In
     ),
   )(i)
 }
+
+
+/// Noms whitespace, including newlines and comments.
+pub fn skip_no_nl1<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
+  -> NomResult<InputType<'a>, (), E>
+{
+  value(
+    (),
+    many1(
+      alt((value((), is_a(" \t")), inline_comment, eol_comment))
+    ),
+  )(i)
+}
+
+
+/// Noms whitespace, including newlines and comments.
+pub fn skip_no_nl0<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
+    -> NomResult<InputType<'a>, (), E>
+{
+  value(
+    (),
+    many0(
+      alt((value((), is_a(" \t")), inline_comment, eol_comment))
+    ),
+  )(i)
+}
+
 
 
 // Noms eol comments, excluding newlines, returning `()`.
