@@ -5,76 +5,97 @@
 
 use std::io::Read;
 
-use nom::{AsChar, branch::alt, bytes::{
-  complete::{
-    escaped,
-    is_a,
-    take_while,
-    is_not,
-    take_until,
-    take_while1,
-    tag,
-  }
-}, character::{
-  complete::{
-    alphanumeric0,
-    alphanumeric1,
-    char as char1,
-    multispace1,
-    newline,
-    none_of,
-    not_line_ending,
-    one_of,
+use nom::{
+  character::complete::{anychar, line_ending, multispace0, crlf, space0},
+  AsChar,
+  branch::alt,
+  bytes::{
+    complete::{
+      escaped,
+      is_a,
+      take_while,
+      is_not,
+      take_until,
+      take_while1,
+      tag,
+    }
   },
-  is_alphanumeric,
-}, combinator::{
-  cond,
-  cut,
-  map,
-  map_optc,
-  map_parser,
-  map_res,
-  not,
-  opt,
-  recognize,
-  value,
-}, Compare, Err as NomErr, error::{
-  ErrorKind,
-  ParseError
-}, InputLength, IResult as NomResult, multi::{
-  fold_many1,
-  many0,
-  many1,
-  separated_nonempty_list as separated_list1,
-}, sequence::{
-  delimited,
-  pair,
-  preceded,
-  precededc,
-  separated_pair,
-  terminated,
-  tuple,
-}, Slice, InputTake};
-use nom::character::complete::{anychar, line_ending, multispace0, crlf};
-use nom::combinator::{flat_map, peek};
-use nom::multi::many_till;
+  character::{
+    complete::{
+      alphanumeric0,
+      alphanumeric1,
+      char as char1,
+      multispace1,
+      newline,
+      none_of,
+      not_line_ending,
+      one_of,
+    },
+    is_alphanumeric,
+  },
+  combinator::{
+    cond,
+    cut,
+    map,
+    map_optc,
+    map_parser,
+    map_res,
+    not,
+    opt,
+    recognize,
+    value,
+  },
+  Compare,
+  Err as NomErr,
+  error::{
+    ErrorKind,
+    ParseError
+  },
+  InputLength,
+  IResult as NomResult,
+  multi::{
+    fold_many1,
+    many0,
+    many1,
+    separated_nonempty_list as separated_list1,
+  },
+  sequence::{
+    delimited,
+    pair,
+    preceded,
+    precededc,
+    separated_pair,
+    terminated,
+    tuple,
+  },
+  Slice,
+  InputTake,
+  InputIter,
+  InputTakeAtPosition,
+  combinator::{flat_map, peek},
+  multi::many_till
+};
 use nom_locate::LocatedSpan;
-use source::*;
-use whitespace::*;
 
-use crate::{error::{
-  Error,
-  Errors,
-  ExpectedFoundError,
-  IncorrectDelimError,
-  InvalidLabelError,
-  UnclosedDelimError,
-  UnexpectedError,
-  UnexpectedSectionEndError,
-}, section_items::*};
-use crate::mergable::{Merged, Mergable};
-use crate::error::Error::{ExpectedFound, IncorrectDelim, InvalidLabel, UnexpectedSectionEnd, UnclosedDelim};
+use crate::{
+  error::{
+    Error,
+    Errors,
+    ExpectedFoundError,
+    IncorrectDelimError,
+    InvalidLabelError,
+    UnclosedDelimError,
+    UnexpectedError,
+    UnexpectedSectionEndError,
+  },
+  section_items::*,
+  mergable::{Merged, Mergable},
+  error::Error::{ExpectedFound, IncorrectDelim, InvalidLabel, UnexpectedSectionEnd, UnclosedDelim}
+};
+use whitespace::*;
+use source::*;
 use super::*;
+use crate::options::OptionKind;
 
 // todo: make typedef for Errors
 type InputType<'a> = LSpan<'a>;
@@ -87,8 +108,8 @@ pub type IResult<'a> = NomResult<InputType<'a>, SectionItem, Errors>;
 pub type SResult<'a> = NomResult<InputType<'a>, SectionItemSet, Errors>;
 
 
-/// Parses section 1 of the scanner specification file.
-pub fn section_1(i: InputType) -> SResult {
+/// Parses section one of the scanner specification file.
+pub fn section_one(i: InputType) -> SResult {
   // todo: change to many1_until
 
   // Each alternative returns a `SectionOneItemSet` which are folded into each other.
@@ -96,7 +117,9 @@ pub fn section_1(i: InputType) -> SResult {
     alt((
       parse_code_block,
       parse_include,
-      /*state, option,*/
+      parse_option,
+
+      /* state */
 
       // Separating the next two ensures that `parse_code_block` has an opportunity to see the
       // whitespace introducing indented code.
@@ -112,6 +135,73 @@ pub fn section_1(i: InputType) -> SResult {
 }
 
 /**
+Expression on a new line of the form:
+
+  %option noline freespace tab=4 graphs_file="graphs.gv"
+
+The phrase `%include` following by one or more optionally quoted file names.
+*/
+fn parse_option(i: InputType) -> NomResult<InputType, Vec<OptionField>, Errors> {
+
+  let (input, _) = terminated(parse_keyword("option"), space0)(i)?;
+
+
+
+  alt((
+    // tab=4 namespace="ChickenScanner"
+    terminated(
+      separated_pair(
+        is_not(" \t=\n"),
+        delimited(space0, tag("="), space0),
+        parse_name
+      ),
+      space0
+    ),
+
+    // Negated option:  noline nodebug
+    delimited(tag("no"), is_not(" \t=\n"), space0),
+
+    // A non-negated option
+    terminated(is_not(" \t=\n"), space0)
+  ))
+
+}
+
+
+/// Parses expressions of the form:  tab=4 namespace="ChickenScanner"
+fn option_with_value(input: InputType) -> NomResult<InputType, OptionField, Errors>{
+  let (rest, (key, value)) = terminated(
+    separated_pair(
+      is_not(" \t=\n"),
+      delimited(space0, tag("="), space0),
+      parse_name
+    ),
+    space0
+  )(input)?;
+
+  let field = match OPTIONS.get(key) {
+    Some(OptionKind::String(field)) => {
+      field.0 = value;
+    },
+    Some(OptionKind::Bool(field)) => {
+
+    },
+    Some(OptionKind::Number(field)) => {
+
+    },
+    Some(OptionKind::Legacy(field)) => {
+      println!("The option {} is a legacy option. Ignoring.", key);
+      field
+    },
+    Some(OptionKind::Unimplemented(field)) => {
+      println!("The option {} is not implemented. Ignoring.", key);
+      field
+    },
+  };
+}
+
+
+/**
 Constructs the parser that parses code for `ItemType` `item_type`.
 
 There are five `ItemType`s this applies to:
@@ -123,13 +213,13 @@ ItemType::User
 ItemType::Unknown
 ```
 */
-fn make_code_parser(item_type: ItemType) -> impl Fn(InputType) -> PResult {
+fn parse_code_type(item_type: ItemType) -> impl Fn(InputType) -> PResult {
   move |input| {
     tag(item_type.open_delimiter())(input)
         .and_then(
           |(rest, delim_span)| {
             report(delim_span, item_type);
-            nested_code(rest, item_type)
+            parse_nested_code(rest, item_type)
                 .map_err(
                   |mut result| {
                     if let NomErr::Failure(errors) = &mut result {
@@ -159,7 +249,7 @@ fn make_code_parser(item_type: ItemType) -> impl Fn(InputType) -> PResult {
 
 
 /**
-Parses line(s) of code as found in `%{ %}`, `%%top`, `%%class`, and `%%init`, returning a
+Parses line(s) of code as found in `%{ %}`, `%top`, `%class`, and `%init`, returning a
 `SectionOneItemSet`.
 
 There is an interesting question of what to do with input that doesn't make sense but that is
@@ -174,17 +264,17 @@ fn parse_code_block(i: InputType) -> SResult {
 
       // Indented User Code
       fold_many1(
-        preceded(is_a("\t "), recognize(pair(not_line_ending, line_ending))),
+        recognize(preceded(is_a("\t "), pair(not_line_ending, line_ending))),
         SectionItemSet::default(),
         | mut acc, mut next: InputType | {
-          acc.push(SectionItem::User(next.to_span()));
+          merge_or_push_item(&mut acc, SectionItem::User(next.to_span()));
           acc
         }
       ),
 
       // %top{
       map(
-        make_code_parser(ItemType::Top),
+        parse_code_type(ItemType::Top),
         |span| {
           vec![SectionItem::Top(span)]
         },
@@ -192,7 +282,7 @@ fn parse_code_block(i: InputType) -> SResult {
 
       // %class{
       map(
-        make_code_parser(ItemType::Class),
+        parse_code_type(ItemType::Class),
         |span| {
           vec![SectionItem::Class(span)]
         },
@@ -200,7 +290,7 @@ fn parse_code_block(i: InputType) -> SResult {
 
       // %init{
       map(
-        make_code_parser(ItemType::Init),
+        parse_code_type(ItemType::Init),
         |span| {
           vec![SectionItem::Init(span)]
         },
@@ -208,7 +298,7 @@ fn parse_code_block(i: InputType) -> SResult {
 
       // Unlabeled user code within `%{ %}`
       map(
-        make_code_parser(ItemType::User),
+        parse_code_type(ItemType::User),
         |span| {
           vec![SectionItem::User(span)]
         },
@@ -216,7 +306,7 @@ fn parse_code_block(i: InputType) -> SResult {
 
       // ordinary code within `{ }`
       map(
-        make_code_parser(ItemType::Unknown),
+        parse_code_type(ItemType::Unknown),
         |span| {
           vec![SectionItem::Unknown(span)]
         },
@@ -258,7 +348,7 @@ This function halts parsing on error.
 */
 // todo: Continue parsing after errors.
 // todo: Do we have a use for `brace_level` or `block_level`
-pub fn nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'a> {
+pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'a> {
   map_res::<_, _, _, _, Errors, _, _>(
     many_till(
 
@@ -267,7 +357,7 @@ pub fn nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'a> {
       alt((
 
         // {...}
-        make_code_parser(ItemType::Unknown),
+        parse_code_type(ItemType::Unknown),
 
         // A string: "This, }, is a closing brace but does not close a block."
         map(parse_string, |l_span| {
@@ -435,6 +525,50 @@ fn parse_filename(i: InputType) -> Result {
 
 
 /**
+Keywords of the form `%keyword` can appear as any nonempty prefix: `%k`, `%key`, etc.
+*/
+fn parse_keyword(keyword: &'static str) -> impl Fn(InputType) -> Result {
+  move |input| {
+    // If the initial `%` doesn't match, don't bother continuing.
+    let mut c = input.iter_elements();
+    if c.next() != Some('%') {
+      return Err(NomErr::Error(Errors::from_error_kind(input, ErrorKind::Tag)));
+    }
+
+    // The first keyword char MUST match. This catches the case that `c` is exhausted after
+    // the initial `%`.
+    let mut k = keyword.iter_elements();
+    let c_next = c.next();
+    let k_next = k.next();
+    if c_next.is_none() ||
+       k_next.is_none() ||
+       c_next.unwrap().to_lowercase() != k_next.unwrap().to_lowercase()
+    {
+      return Err(NomErr::Error(Errors::from_error_kind(input, ErrorKind::Tag)));
+    }
+
+    for (n, c_next) in c.enumerate() {
+      if "\t ".contains(c_next) {
+        // The input word is a prefix of keyword, success. Add 3 for `%`, first letter, and ws
+        // character.
+        return Ok(input.take_split(n + 3));
+      }
+
+      let k_next = k.next();
+      // If `k_next.is_none()`, then the input has a suffix that `keyword` doesn't and hence
+      // doesn't match.
+      if k_next.is_none() || k_next.unwrap() != c_next {
+        return Err(NomErr::Error(Errors::from_error_kind(input, ErrorKind::Tag)));
+      }
+    }
+
+    // The input has been exhausted. The input word is a prefix of keyword, success.
+    Ok(input.take_split(input.fragment().len()))
+  }
+}
+
+
+/**
 Expression on a new line of the form:
 
   %include file1 "file2" "file3"
@@ -443,7 +577,7 @@ The phrase `%include` following by one or more optionally quoted file names.
 */
 fn parse_include(i: InputType) -> SResult {
   let (rest, files) = preceded(
-    tuple((tag("%i"), opt(tag("nclude")), is_a(" \t"))),
+    parse_keyword("include"),
     cut(separated_list1(multispace1, parse_filename))
   )(i)?;
 
@@ -466,7 +600,7 @@ fn parse_include(i: InputType) -> SResult {
 
     // todo: Figure out how to implement SourceFile, give it to codespan_reporting.
 
-    match section_1(InputType::new(new_source.as_str())) {
+    match section_one(InputType::new(new_source.as_str())) {
       Ok((_rest, section_items)) => section_items,
       Err(errors) => {
         panic!("{}", errors);

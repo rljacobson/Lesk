@@ -68,6 +68,7 @@ use crate::{
 };
 
 use super::*;
+use nom::character::complete::space1;
 
 
 // todo: make typedef for Errors
@@ -148,7 +149,7 @@ pub fn skip_no_nl1<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
   value(
     (),
     many1(
-      alt((value((), is_a(" \t")), inline_comment, eol_comment))
+      alt((value((), space1), inline_comment, eol_comment))
     ),
   )(i)
 }
@@ -161,7 +162,7 @@ pub fn skip_no_nl0<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
   value(
     (),
     many0(
-      alt((value((), is_a(" \t")), inline_comment, eol_comment))
+      alt((value((), space1), inline_comment, eol_comment))
     ),
   )(i)
 }

@@ -6,7 +6,7 @@ use std::fs::File;
 use structopt::StructOpt;
 
 use super::*;
-use parser::parser::section_1 as parse_section_one;
+use parser::parser::section_one as parse_section_one;
 use nom_locate::LocatedSpan;
 
 
@@ -206,10 +206,12 @@ impl<'s> Specification<'s> {
 
     match result {
       Ok((_rest, section_items)) => {
-        println!("Parsed {} items.", section_items.len());
-        for item in section_items {
-          println!("{}", item);
-        }
+
+        // println!("Parsed {} items.", section_items.len());
+        // for item in section_items {
+        //   println!("{}", item);
+        // }
+
       },
 
       Err(e) => {

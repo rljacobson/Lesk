@@ -236,30 +236,6 @@ impl SectionItem {
     self.item_type().close_delimiter()
   }
 
-  /*
-  // Pushes a `span` onto the `code` vector when `self` is a code-wrapping `SectionOneItem`.
-  // Panics otherwise.
-  pub fn push_code<S>(&mut self, span: S)
-    where S: Into<Span>
-  {
-    match self {
-      | SectionItem::User(code)
-      | SectionItem::Top(code)
-      | SectionItem::Class(code)
-      | SectionItem::Init(code)
-      | SectionItem::State { code, .. }
-      | SectionItem::Unknown(code) => {
-        code.push(span.into());
-      }
-
-      | SectionItem::Include { .. }
-      | SectionItem::Options(_) => {
-        panic!("Tried to push {} onto code.", self);
-      }
-    }
-  }
-*/
-
   pub fn get_code(&mut self) -> Option<&mut Span> {
     match self {
       | SectionItem::User(code)
@@ -302,8 +278,17 @@ impl Mergable for SectionItem {
 
   fn mergable(&self, other: &SectionItem) -> bool {
 
-    self.item_type() == other.item_type() || self.item_type().is_code() &&
-        other.item_type() == ItemType::Unknown
+    if !self.is_code() || !other.is_code() {
+      return false;
+    }
+
+    if self.item_type() != other.item_type() && !(self.item_type().is_code() &&
+        other.item_type() == ItemType::Unknown) {
+      return false;
+    }
+
+    self.to_span().mergable(&other.to_span())
+
   }
 
 
@@ -325,9 +310,11 @@ impl Mergable for SectionItem {
         => {
           // Unwrap always succeeds because of outer `if`.
           let other_code = other.get_code().unwrap();
-          self_code.merged(other_code);
 
-          Merged::Yes(self)
+          match self_code.merged(other_code) {
+            Merged::Yes(_) => Merged::Yes(self),
+            Merged::No(_, _) => Merged::No(self, other)
+          }
         }
 
         | SectionItem::State{..}

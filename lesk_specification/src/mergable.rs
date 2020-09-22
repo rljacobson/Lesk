@@ -22,7 +22,9 @@ pub enum Merged<T, U> {
 impl<T, U> Merged<T, U> {
   pub fn unwrap(self) -> T {
     match self {
+
       Merged::Yes(t) => t,
+
       Merged::No(_, _) => {
         panic!("Attempted to unwrap a Merged::No(T, U).");
       }
@@ -137,8 +139,6 @@ pub fn merge_or_push_item<T>(items: &mut Vec<T>, mut item: T) -> &mut Vec<T>
 
   // Unwrap always succeeds because of preceding `if`.
   let mut last_item = items.pop().unwrap();
-  print!("Attempting merge of {} and {}... ", last_item, item);
-
   let mut result = last_item.merged(&mut item);
 
   match result {
@@ -162,11 +162,9 @@ pub fn merge_or_append_items<'a, T>(lhs: &'a mut Vec<T>, rhs: &'a mut Vec<T>) ->
   where T: Mergable + Debug + Display
 {
   if lhs.is_empty() {
-    // println!("Empty lhs while trying to merge rhs={:?}", rhs);
     std::mem::swap(lhs, rhs);
     return lhs;
   } else if rhs.is_empty() {
-    // println!("Empty rhs while trying to merge lhs={:?}", lhs);
     std::mem::swap(lhs, rhs);
     return lhs;
   }
@@ -174,8 +172,8 @@ pub fn merge_or_append_items<'a, T>(lhs: &'a mut Vec<T>, rhs: &'a mut Vec<T>) ->
   // Unwraps always succeed because of preceding `if` block.
   let mut lhs_last_item  = lhs.pop().unwrap();
   let mut rhs_first_item = rhs.first_mut().unwrap();
-  // println!("Attempting to merge {:?} with {:?}", lhs_last_item, rhs_first_item);
   match lhs_last_item.merged(rhs_first_item) {
+
     Merged::No(_, _) => {
       lhs.push(lhs_last_item); // Unpop
       // Can still "merge" the vectors
@@ -186,6 +184,7 @@ pub fn merge_or_append_items<'a, T>(lhs: &'a mut Vec<T>, rhs: &'a mut Vec<T>) ->
       lhs.push(lhs_last_item);
       lhs.extend(rhs.drain(1..));
     }
+
   }
   lhs
 }
