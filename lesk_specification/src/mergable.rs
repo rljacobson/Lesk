@@ -143,12 +143,12 @@ pub fn merge_or_push_item<T>(items: &mut Vec<T>, mut item: T) -> &mut Vec<T>
 
   match result {
     Merged::Yes(_) => {
-      println!("Success: {}", last_item);
+      // println!("Success: {}", last_item);
       items.push(last_item);
     }
 
     Merged::No(_, _) => {
-      println!("failed.");
+      // println!("failed.");
       items.push(last_item);
       items.push(item);
     }

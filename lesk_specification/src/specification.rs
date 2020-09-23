@@ -4,10 +4,15 @@ use std::io::{Write, Read, BufWriter};
 use std::fs::File;
 
 use structopt::StructOpt;
+use nom_locate::LocatedSpan;
+use codespan_reporting::term::{emit, termcolor, Config};
+use nom::Err as NomErr;
 
 use super::*;
 use parser::parser::section_one as parse_section_one;
-use nom_locate::LocatedSpan;
+use crate::section_items::SectionItem;
+use crate::error::Errors;
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
 
 static DEFAULT_OUTPUT_PATH: &str = "lex.yy.cpp";
@@ -18,9 +23,9 @@ pub struct Specification<'s> {
   color_term  : bool,    //< terminal supports colors
 
   writer       : Box<dyn FnMut(&str)>, //< output stream
-  source_files: SourceFiles,       //< Source code database
+  source_files: SourceFiles<String, String>,       //< Source code database
   // source       : String,               //< source text
-  source_id    : FileId,
+  source_id    : usize,
 
   conditions  : StrVec<'s>, //< "INITIAL" start condition etc. defined with %x name
   definitions : StrMap<'s>, //< map of {name} to regex
@@ -53,10 +58,10 @@ impl<'s> Default for Specification<'s> {
       color_term     : true,
       // todo        : writer to be replaced with Akama
       writer         : Box::new(|_|{}),       // a dummy initial value
-      source_files: SourceFiles::default(),
+      source_files: SourceFiles::new(),
       // source         : String::default(),
       // in_file        : String::default(),
-      source_id      : FileId::new(43),       // Arbitrary initial value will be overwritten
+      source_id      : 43usize,       // Arbitrary initial value will be overwritten
       conditions     : StrVec::default(),
       definitions    : StrMap::default(),
       inclusive      : Starts::default(),
@@ -183,7 +188,7 @@ impl<'s> Specification<'s> {
 
   pub fn parse(&mut self) {
 
-    if self.source_files.files.is_empty(){
+    if self.source_files.is_empty(){
       eprintln!("Empty source file.");
       return;
     }
@@ -201,25 +206,45 @@ impl<'s> Specification<'s> {
   pub fn parse_section_1(&mut self) {
 
     let result = parse_section_one(
-      LocatedSpan::new(self.source_files.get(self.source_id).source().as_str())
+      LocatedSpan::new(self.source_files.get(self.source_id).unwrap().source().as_str())
     );
 
     match result {
       Ok((_rest, section_items)) => {
 
-        // println!("Parsed {} items.", section_items.len());
-        // for item in section_items {
-        //   println!("{}", item);
-        // }
+        println!("Parsed {} items.", section_items.len());
+        for item in section_items {
+          println!("{}", item);
+        }
 
       },
 
-      Err(e) => {
-        println!("ERROR: {}", e);
+      Err(NomErr::Error(e)) => {
+        let mut writer = StandardStream::stderr(ColorChoice::Always);
+        let config = codespan_reporting::term::Config::default();
+
+        for d in e.to_diagnostics(self.source_id){
+          emit(&mut writer, &config, &self.source_files, &d);
+        }
+      },
+
+      Err(NomErr::Failure(e)) => {
+        let mut writer = StandardStream::stderr(ColorChoice::Always);
+        let config = codespan_reporting::term::Config::default();
+
+        for d in e.to_diagnostics(self.source_id){
+          emit(&mut writer, &config, &self.source_files, &d);
+
+        }
+      }
+      Err(NomErr::Incomplete(_)) => {
+        panic!("Got a nom incomplete error.");
       }
     }
 
   }
+
+
 
   /*
   void        parse_section_2();

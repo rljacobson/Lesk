@@ -16,7 +16,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::iter::FromIterator;
 use std::slice::Iter;
 
-use codespan::{FileId, Span};
+use codespan::{Span};
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use nom::error::{ErrorKind, ParseError};
 use smallvec::{smallvec, IntoIter, SmallVec};
@@ -30,14 +30,17 @@ pub use self::unexpected_section_end::UnexpectedSectionEndError;
 pub use self::missing::MissingError;
 
 use crate::parser::ToSpan;
+use super::FileId;
 
 // todo: update the examples to match new `codespan_reporting` version.
+
+
 /// Trait for converting error types to pretty-printable diagnostics.
 ///
 /// # Examples
 ///
 /// ```
-/// use codespan::{Files, FileId, Span};
+/// use codespan::{Files, Span};
 /// use codespan_reporting::diagnostic::{Diagnostic, Label};
 /// use nix_parser::error::ToDiagnostic;
 ///

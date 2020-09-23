@@ -74,9 +74,6 @@ impl ItemType {
         unreachable!("Cannot use ItemType::from_code to create an Options, Include, or State.");
       }
 
-
-
-
     }
   }
 
@@ -138,7 +135,7 @@ pub enum SectionItem {
   Init(Span),
   Unknown(Span),
   Include {
-    file: SourceFile,
+    file: SourceFile<String, String>,
     contents: SectionItemSet,
   },
   State {

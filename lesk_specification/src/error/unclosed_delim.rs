@@ -2,10 +2,10 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-use codespan::{FileId, Span};
+use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::ToDiagnostic;
+use super::{ToDiagnostic, FileId};
 use crate::parser::ToSpan;
 
 /// Error that occurs when at least one delimited span was left unclosed.

@@ -75,7 +75,7 @@ pub enum OptionField {
   Yywrap(bool),
 
   // Debugging and Benchmarking
-  Debug(bool),
+  Debug_(bool),
   Default(bool),
   Warn(bool),
   PerfReport(bool),
@@ -373,7 +373,7 @@ impl Options {
         CaseInsensitive(v) => { self.case_insensitive = v; }
         Class(v) => { self.class = Some(v); }
         Cpp(v) => { self.cpp = v; }
-        Debug(v) => { self.debug = v; }
+        Debug_(v) => { self.debug = v; }
         Default(v) => { self.default = v; }
         Dotall(v) => { self.dotall = v; }
         Exception(v) => { self.exception = Some(v); }
@@ -444,7 +444,7 @@ pub static OPTIONS: phf::Map<&'static str, OptionKind> = phf_map! {
   "c++"                => OptionKind::Bool(Cpp),
   "class"              => OptionKind::String(Class),
   "ctorarg"            => OptionKind::Legacy,
-  "debug"              => OptionKind::Bool(Debug),
+  "debug"              => OptionKind::Bool(Debug_),
   "default"            => OptionKind::Bool(Default),
   "dotall"             => OptionKind::Bool(Dotall),
   "ecs"                => OptionKind::Legacy,

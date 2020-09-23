@@ -205,21 +205,21 @@ fn option_boolean(i: InputType) -> NomResult<InputType, Option<OptionField>, Err
   }
 }
 
-/// Parses expressions of the form:  tab=4 namespace="ChickenScanner"
+/// Parses expressions of the form:  tabs=4 namespace="ChickenScanner"
 fn option_with_value(input: InputType) -> NomResult<InputType, Option<OptionField>, Errors> {
   let (rest, (key, sep, value)) = terminated(
     tuple((
-      is_not(" \t=\n"),
+      is_not(" \t=\n\r"),
       delimited(space0, tag("="), space0),
-      is_not(" \t=\n"),
+      is_not(" \t=\n\r"),
     )),
     space0
   )(input)?;
 
   match OPTIONS.get(key.fragment().to_lowercase().as_str()) {
     Some(OptionKind::String(field)) => {
-      let (_, v) = parse_name(value)?;
-      Ok((rest, Some(field(v)) ))
+      let (_, v) = parse_quoted(value)?;
+      Ok((rest, Some(field(v.to_string())) ))
     }
 
     Some(OptionKind::Number(field)) => {
@@ -257,9 +257,8 @@ fn option_with_value(input: InputType) -> NomResult<InputType, Option<OptionFiel
     }
 
     None => {
-      let span_end = key.offset(&rest) + key.fragment().len();
       Err(NomErr::Failure(Errors::from(
-        Unexpected(UnexpectedError::new("unknown option", input.slice(0..span_end), None))
+        Unexpected(UnexpectedError::new("unknown option", key, None))
       )))
     }
   }
@@ -299,7 +298,6 @@ fn parse_code_type(item_type: ItemType) -> impl Fn(InputType) -> PResult {
                 )
                 .and_then(|(rest, inner_span)| {
                   // Put the delim_span back on the inner_span if item_type is ItemType::Unknown.
-                  // println!(">>>> {}: {}", item_type, inner_span);
                   if item_type == ItemType::Unknown {
                     Ok((rest, delim_span.to_span().merge(inner_span)))
                   } else {
@@ -395,7 +393,8 @@ fn parse_code_block(i: InputType) -> SResult {
         },
       ),
     )),
-    |item| item
+    |item|
+        item
   )(i)
 }
 
@@ -404,11 +403,7 @@ fn parse_code_block(i: InputType) -> SResult {
 Recursively parses blocks of code assuming the opening brace has already been consumed. The code
 is accumulated in the `user_code` and/or `unknown` fields of a `ParsedCode` struct. The client
 code must recategorize the `unknown` code according to which labeled block this functon was
-called to parse. This is easily done with a `swap`:
-
-    std::mem::swap(&mut code.unknown, &mut code.top_code);
-
-This function halts parsing on error.
+called to parse.
 */
 // todo: Continue parsing after errors.
 // todo: Do we have a use for `brace_level` or `block_level`
@@ -577,8 +572,8 @@ fn parse_character(i: InputType) -> Result {
 
 
 /**
-Parses a filename which is either a sequence of non-whitespace characters terminated by
-whitespace or EOF or a quoted string.
+Parses a filename, which is either a quoted string or a sequence of non-whitespace characters
+terminated by whitespace or EOF.
 */
 fn parse_filename(i: InputType) -> Result {
   alt((
@@ -680,6 +675,8 @@ fn parse_include(i: InputType) -> SResult {
 }
 
 
+/// Parses a quoted string with escapes and returns the entire string, including the surrounding
+/// double quotes. No escapes are transformed.
 fn parse_string(i: InputType) -> Result {
   recognize(preceded(
     char1('"'),
@@ -691,18 +688,24 @@ fn parse_string(i: InputType) -> Result {
   ))(i)
 }
 
+/*
+Parses a string of non-whitespace that is optionally surrounded by double quotes. If the
+quotes are present, they are consumed but excluded from the result.
 
-fn parse_name(i: InputType) -> NomResult<InputType, String, Errors> {
-  map(
-    alt((
-      parse_string,
-      preceded(not(char1('"')), is_not(" \t\r\n"))
-    )),
-    |l_span| {
-      // Normalize `-` to `_`
-      l_span.to_string().replace("-", "_")
-    }
-  )(i)
+Note that `parse_string()` includes any surrounding quotes and accounts for escaped characters,
+while `parse_filename()` is either `parse_string()` or a string of non-whitespace characters.
+*/
+fn parse_quoted(i: InputType) -> Result {
+  alt((
+    preceded(
+      char1('"'),
+      cut(terminated(
+        escaped(none_of(r#""\"#), '\\', anychar),
+        char1('"'),
+      )),
+    ),
+    preceded(not(char1('"')), is_not(" \t\r\n"))
+  ))(i)
 }
 
 #[allow(unused_variables)]

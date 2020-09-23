@@ -1,7 +1,7 @@
 #[cfg(feature = "serialization")]
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
-use std::num::{NonZeroU8};
+use std::num::{NonZeroU8, NonZeroU32};
 use std::{error, fmt};
 
 use codespan::{
@@ -17,442 +17,155 @@ use codespan::{
   SpanOutOfBoundsError,
 };
 
+// pub use codespan::FileId;
+use codespan_reporting::files::{Files, line_starts};
+use std::ops::Range;
 
 
-/// A handle that points to a file in the database.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serialization", derive(Deserialize, Serialize))]
-pub struct FileId(NonZeroU8);
-
-impl FileId {
-  /// Offset of our `FileId`'s numeric value to an index on `Files::files`.
-  ///
-  /// This is to ensure the first `FileId` is non-zero for memory layout optimisations (e.g.
-  /// `Option<FileId>` is 4 bytes)
-  const OFFSET: u8 = 1;
-
-  pub fn new(index: usize) -> FileId {
-    FileId(NonZeroU8::new(index as u8 + Self::OFFSET).unwrap())
-  }
-
-  pub fn get(self) -> usize {
-    (self.0.get() - Self::OFFSET) as usize
-  }
-}
-
-
-
-/// A database of source files.
+/// A file database that contains a single source file.
 ///
-/// The `Source` generic parameter determines how source text is stored. Using [`String`] will have
-/// `Files` take ownership of all source text. Smart pointer types such as [`Cow<'_, str>`],
-/// [`Rc<str>`] or [`Arc<str>`] can be used to share the source text with the rest of the program.
-/// ```rust
-/// [`Cow<'_, str>`]: std::borrow::Cow
-/// [`Rc<str>`]: std::rc::Rc
-/// [`Arc<str>`]: std::sync::Arc
-/// ```
-/// (Adapted from the `codespan` source.)
-#[derive(Clone, Debug)]
-pub struct SourceFiles<Source> {
-  pub files: Vec<SourceFile<Source>>,
-}
-
-impl<Source> Default for SourceFiles<Source>
-  where
-      Source: AsRef<str>,
-{
-  fn default() -> Self {
-    Self { files: vec![] }
-  }
-}
-
-impl<Source> SourceFiles<Source>
-  where
-      Source: AsRef<str>,
-{
-  /// Create a new, empty database of files.
-  pub fn new() -> Self {
-    SourceFiles::<Source>::default()
-  }
-
-  /// Add a file to the database, returning the handle that can be used to
-  /// refer to it again.
-  pub fn add(&mut self, name: impl Into<OsString>, source: Source) -> FileId {
-    let file_id = FileId::new(self.files.len());
-    self.files.push(SourceFile::new(name.into(), source.into()));
-    file_id
-  }
-
-  /// Update a source file in place.
-  ///
-  /// This will mean that any outstanding byte indexes will now point to
-  /// invalid locations.
-  pub fn update(&mut self, file_id: FileId, source: Source) {
-    self.get_mut(file_id).update(source.into())
-  }
-
-  /// Get a the source file using the file id.
-  // FIXME: return an option or result?
-  pub fn get(&self, file_id: FileId) -> &SourceFile<Source> {
-    &self.files[file_id.get()]
-  }
-
-  /// Get a the source file using the file id.
-  // FIXME: return an option or result?
-  pub fn get_mut(&mut self, file_id: FileId) -> &mut SourceFile<Source> {
-    &mut self.files[file_id.get()]
-  }
-
-  /// Get the name of the source file.
-  ///
-  /// ```rust
-  /// use codespan::Files;
-  ///
-  /// let name = "test";
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add(name, "hello world!");
-  ///
-  /// assert_eq!(files.name(file_id), name);
-  /// ```
-  pub fn name(&self, file_id: FileId) -> &OsStr {
-    self.get(file_id).name()
-  }
-
-  /// Get the span at the given line index.
-  ///
-  /// ```rust
-  /// use codespan::{Files, LineIndex, LineIndexOutOfBoundsError, Span};
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add("test", "foo\nbar\r\n\nbaz");
-  ///
-  /// let line_sources = (0..5)
-  ///     .map(|line| files.line_span(file_id, line))
-  ///     .collect::<Vec<_>>();
-  ///
-  /// assert_eq!(
-  ///     line_sources,
-  ///     [
-  ///         Ok(Span::new(0, 4)),    // 0: "foo\n"
-  ///         Ok(Span::new(4, 9)),    // 1: "bar\r\n"
-  ///         Ok(Span::new(9, 10)),   // 2: ""
-  ///         Ok(Span::new(10, 13)),  // 3: "baz"
-  ///         Err(LineIndexOutOfBoundsError {
-  ///             given: LineIndex::from(5),
-  ///             max: LineIndex::from(4),
-  ///         }),
-  ///     ]
-  /// );
-  /// ```
-  pub fn line_span(
-    &self,
-    file_id: FileId,
-    line_index: impl Into<LineIndex>,
-  ) -> Result<Span, LineIndexOutOfBoundsError> {
-    self.get(file_id).line_span(line_index.into())
-  }
-
-  /// Get the line index at the given byte in the source file.
-  ///
-  /// ```rust
-  /// use codespan::{Files, LineIndex};
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add("test", "foo\nbar\r\n\nbaz");
-  ///
-  /// assert_eq!(files.line_index(file_id, 0), LineIndex::from(0));
-  /// assert_eq!(files.line_index(file_id, 7), LineIndex::from(1));
-  /// assert_eq!(files.line_index(file_id, 8), LineIndex::from(1));
-  /// assert_eq!(files.line_index(file_id, 9), LineIndex::from(2));
-  /// assert_eq!(files.line_index(file_id, 100), LineIndex::from(3));
-  /// ```
-  pub fn line_index(&self, file_id: FileId, byte_index: impl Into<ByteIndex>) -> LineIndex {
-    self.get(file_id).line_index(byte_index.into())
-  }
-
-  /// Get the location at the given byte index in the source file.
-  ///
-  /// ```rust
-  /// use codespan::{ByteIndex, Files, Location, LocationError, Span};
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add("test", "foo\nbar\r\n\nbaz");
-  ///
-  /// assert_eq!(files.location(file_id, 0), Ok(Location::new(0, 0)));
-  /// assert_eq!(files.location(file_id, 7), Ok(Location::new(1, 3)));
-  /// assert_eq!(files.location(file_id, 8), Ok(Location::new(1, 4)));
-  /// assert_eq!(files.location(file_id, 9), Ok(Location::new(2, 0)));
-  /// assert_eq!(
-  ///     files.location(file_id, 100),
-  ///     Err(LocationError::OutOfBounds {
-  ///         given: ByteIndex::from(100),
-  ///         span: Span::new(0, 13),
-  ///     }),
-  /// );
-  /// ```
-  pub fn location(
-    &self,
-    file_id: FileId,
-    byte_index: impl Into<ByteIndex>,
-  ) -> Result<Location, LocationError> {
-    self.get(file_id).location(byte_index.into())
-  }
-
-  /// Get the source of the file.
-  ///
-  /// ```rust
-  /// use codespan::Files;
-  ///
-  /// let source = "hello world!";
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add("test", source);
-  ///
-  /// assert_eq!(*files.source(file_id), source);
-  /// ```
-  pub fn source(&self, file_id: FileId) -> &Source {
-    self.get(file_id).source()
-  }
-
-  /// Return the span of the full source.
-  ///
-  /// ```rust
-  /// use codespan::{Files, Span};
-  ///
-  /// let source = "hello world!";
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add("test", source);
-  ///
-  /// assert_eq!(files.source_span(file_id), Span::from_str(source));
-  /// ```
-  pub fn source_span(&self, file_id: FileId) -> Span {
-    self.get(file_id).source_span()
-  }
-
-  /// Return a slice of the source file, given a span.
-  ///
-  /// ```rust
-  /// use codespan::{Files, Span};
-  ///
-  /// let mut files = Files::new();
-  /// let file_id = files.add("test",  "hello world!");
-  ///
-  /// assert_eq!(files.source_slice(file_id, Span::new(0, 5)), Ok("hello"));
-  /// assert!(files.source_slice(file_id, Span::new(0, 100)).is_err());
-  /// ```
-  pub fn source_slice(
-    &self,
-    file_id: FileId,
-    span: impl Into<Span>,
-  ) -> Result<&str, SpanOutOfBoundsError> {
-    self.get(file_id).source_slice(span.into())
-  }
-}
-
-#[cfg(feature = "reporting")]
-impl<'a, Source> codespan_reporting::files::Files<'a> for SourceFiles<Source>
-  where
-      Source: AsRef<str>,
-{
-  type FileId = FileId;
-  type Name = String;
-  type Source = &'a str;
-
-  fn name(&self, id: FileId) -> Option<String> {
-    use std::path::PathBuf;
-
-    Some(PathBuf::from(self.name(id)).display().to_string())
-  }
-
-  fn source(&'a self, id: FileId) -> Option<&str> {
-    Some(self.source(id).as_ref())
-  }
-
-  fn line_index(&self, id: FileId, byte_index: usize) -> Option<usize> {
-    Some(self.line_index(id, byte_index as u32).to_usize())
-  }
-
-  fn line_range(&'a self, id: FileId, line_index: usize) -> Option<std::ops::Range<usize>> {
-    let span = self.line_span(id, line_index as u32).ok()?;
-
-    Some(span.start().to_usize()..span.end().to_usize())
-  }
-}
-
-
-
-
-/// A file that is stored in the database.
+/// Because there is only single file in this database we use `()` as a [`FileId`].
+///
+/// This is useful for simple language tests, but it might be worth creating a
+/// custom implementation when a language scales beyond a certain size.
+///
+/// [`FileId`]: Files::FileId
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialization", derive(Deserialize, Serialize))]
-pub struct SourceFile<Source> {
+pub struct SourceFile<Name, Source> {
   /// The name of the file.
-  name: OsString,
+  name: Name,
   /// The source code of the file.
   source: Source,
   /// The starting byte indices in the source code.
-  line_starts: Vec<ByteIndex>,
+  line_starts: Vec<usize>,
 }
 
-impl<Source> SourceFile<Source>
+impl<Name, Source> SourceFile<Name, Source>
   where
+      Name: std::fmt::Display,
       Source: AsRef<str>,
 {
-  pub fn new(name: OsString, source: Source) -> Self {
-    let line_starts = line_starts(source.as_ref())
-        .map(|i| ByteIndex::from(i as u32))
-        .collect();
-
+  /// Create a new source file.
+  pub fn new(name: Name, source: Source) -> SourceFile<Name, Source> {
     SourceFile {
       name,
+      line_starts: line_starts(source.as_ref()).collect(),
       source,
-      line_starts,
     }
   }
 
-  pub fn update(&mut self, source: Source) {
-    let line_starts = line_starts(source.as_ref())
-        .map(|i| ByteIndex::from(i as u32))
-        .collect();
-    self.source = source;
-    self.line_starts = line_starts;
-  }
-
-  pub fn name(&self) -> &OsStr {
+  /// Return the name of the file.
+  pub fn name(&self) -> &Name {
     &self.name
   }
 
-  pub fn line_start(&self, line_index: LineIndex) -> Result<ByteIndex, LineIndexOutOfBoundsError> {
-    use std::cmp::Ordering;
-
-    match line_index.cmp(&self.last_line_index()) {
-      Ordering::Less => Ok(self.line_starts[line_index.to_usize()]),
-      Ordering::Equal => Ok(self.source_span().end()),
-      Ordering::Greater => Err(LineIndexOutOfBoundsError {
-        given: line_index,
-        max: self.last_line_index(),
-      }),
-    }
-  }
-
-  pub fn last_line_index(&self) -> LineIndex {
-    LineIndex::from(self.line_starts.len() as RawIndex)
-  }
-
-  pub fn line_span(&self, line_index: LineIndex) -> Result<Span, LineIndexOutOfBoundsError> {
-    let line_start = self.line_start(line_index)?;
-    let next_line_start = self.line_start(line_index + LineOffset::from(1))?;
-
-    Ok(Span::new(line_start, next_line_start))
-  }
-
-  pub fn line_index(&self, byte_index: ByteIndex) -> LineIndex {
-    match self.line_starts.binary_search(&byte_index) {
-      // Found the start of a line
-      Ok(line) => LineIndex::from(line as u32),
-      Err(next_line) => LineIndex::from(next_line as u32 - 1),
-    }
-  }
-
-  pub fn location(&self, byte_index: ByteIndex) -> Result<Location, LocationError> {
-    let line_index = self.line_index(byte_index);
-    let line_start_index =
-        self.line_start(line_index)
-            .map_err(|_| LocationError::OutOfBounds {
-              given: byte_index,
-              span: self.source_span(),
-            })?;
-    let line_src = self
-        .source
-        .as_ref()
-        .get(line_start_index.to_usize()..byte_index.to_usize())
-        .ok_or_else(|| {
-          let given = byte_index;
-          if given >= self.source_span().end() {
-            let span = self.source_span();
-            LocationError::OutOfBounds { given, span }
-          } else {
-            LocationError::InvalidCharBoundary { given }
-          }
-        })?;
-
-    Ok(Location {
-      line: line_index,
-      column: ColumnIndex::from(line_src.chars().count() as u32),
-    })
-  }
-
+  /// Return the source of the file.
   pub fn source(&self) -> &Source {
     &self.source
   }
 
-  pub fn source_span(&self) -> Span {
-    Span::from_str(self.source.as_ref())
-  }
+  fn line_start(&self, line_index: usize) -> Option<usize> {
+    use std::cmp::Ordering;
 
-  pub fn source_slice(&self, span: Span) -> Result<&str, SpanOutOfBoundsError> {
-    let start = span.start().to_usize();
-    let end = span.end().to_usize();
-
-    self.source.as_ref().get(start..end).ok_or_else(|| {
-      let span = Span::from_str(self.source.as_ref());
-      SpanOutOfBoundsError { given: span, span }
-    })
+    match line_index.cmp(&self.line_starts.len()) {
+      Ordering::Less => self.line_starts.get(line_index).cloned(),
+      Ordering::Equal => Some(self.source.as_ref().len()),
+      Ordering::Greater => None,
+    }
   }
 }
 
-// NOTE: this is copied from `codespan_reporting::files::line_starts` and should be kept in sync.
-fn line_starts<'source>(source: &'source str) -> impl 'source + Iterator<Item = usize> {
-  std::iter::once(0).chain(source.match_indices('\n').map(|(i, _)| i + 1))
-}
+impl<'a, Name, Source> Files<'a> for SourceFile<Name, Source>
+  where
+      Name: 'a + std::fmt::Display + Clone,
+      Source: 'a + AsRef<str>,
+{
+  type FileId = ();
+  type Name = Name;
+  type Source = &'a str;
 
-
-
-#[cfg(test)]
-mod test {
-  use super::*;
-
-  const TEST_SOURCE: &str = "foo\nbar\r\n\nbaz";
-
-  #[test]
-  fn line_starts() {
-    let mut files = SourceFiles::<String>::new();
-    let file_id = files.add("test", TEST_SOURCE.to_owned());
-
-    assert_eq!(
-      files.get(file_id).line_starts,
-      [
-        ByteIndex::from(0),  // "foo\n"
-        ByteIndex::from(4),  // "bar\r\n"
-        ByteIndex::from(9),  // ""
-        ByteIndex::from(10), // "baz"
-      ],
-    );
+  fn name(&self, (): ()) -> Option<Name> {
+    Some(self.name.clone())
   }
 
-  #[test]
-  fn line_span_sources() {
-    // Also make sure we can use `Arc` for source
-    use std::sync::Arc;
+  fn source(&self, (): ()) -> Option<&str> {
+    Some(self.source.as_ref())
+  }
 
-    let mut files = SourceFiles::<Arc<str>>::new();
-    let file_id = files.add("test", TEST_SOURCE.into());
+  fn line_index(&self, (): (), byte_index: usize) -> Option<usize> {
+    match self.line_starts.binary_search(&byte_index) {
+      Ok(line) => Some(line),
+      Err(next_line) => Some(next_line - 1),
+    }
+  }
 
-    let line_sources = (0..4)
-        .map(
-          |line| {
-            let line_span = files.line_span(file_id, line).unwrap();
-            files.source_slice(file_id, line_span)
-          }
-        )
-        .collect::<Vec<_>>();
+  fn line_range(&self, (): (), line_index: usize) -> Option<Range<usize>> {
+    let line_start = self.line_start(line_index)?;
+    let next_line_start = self.line_start(line_index + 1)?;
 
-    assert_eq!(
-      line_sources,
-      [Ok("foo\n"), Ok("bar\r\n"), Ok("\n"), Ok("baz")],
-    );
+    Some(line_start..next_line_start)
+  }
+}
+
+/// A file database that can store multiple source files.
+///
+/// This is useful for simple language tests, but it might be worth creating a
+/// custom implementation when a language scales beyond a certain size.
+#[derive(Debug, Clone)]
+pub struct SourceFiles<Name, Source> {
+  files: Vec<SourceFile<Name, Source>>,
+}
+
+impl<Name, Source> SourceFiles<Name, Source>
+  where
+      Name: std::fmt::Display,
+      Source: AsRef<str>,
+{
+  /// Create a new files database.
+  pub fn new() -> SourceFiles<Name, Source> {
+    SourceFiles { files: Vec::new() }
+  }
+
+  /// Add a file to the database, returning the handle that can be used to
+  /// refer to it again.
+  pub fn add(&mut self, name: Name, source: Source) -> usize {
+    let file_id = self.files.len();
+    self.files.push(SourceFile::new(name, source));
+    file_id
+  }
+
+  /// Get the file corresponding to the given id.
+  pub fn get(&self, file_id: usize) -> Option<&SourceFile<Name, Source>> {
+    self.files.get(file_id)
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.files.is_empty()
+  }
+}
+
+impl<'a, Name, Source> Files<'a> for SourceFiles<Name, Source>
+  where
+      Name: 'a + std::fmt::Display + Clone,
+      Source: 'a + AsRef<str>,
+{
+  type FileId = usize;
+  type Name = Name;
+  type Source = &'a str;
+
+  fn name(&self, file_id: usize) -> Option<Name> {
+    Some(self.get(file_id)?.name().clone())
+  }
+
+  fn source(&self, file_id: usize) -> Option<&str> {
+    Some(self.get(file_id)?.source().as_ref())
+  }
+
+  fn line_index(&self, file_id: usize, byte_index: usize) -> Option<usize> {
+    self.get(file_id)?.line_index((), byte_index)
+  }
+
+  fn line_range(&self, file_id: usize, line_index: usize) -> Option<Range<usize>> {
+    self.get(file_id)?.line_range((), line_index)
   }
 }
