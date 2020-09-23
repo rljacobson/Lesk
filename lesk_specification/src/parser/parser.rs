@@ -92,13 +92,14 @@ use crate::{
   mergable::{Merged, Mergable},
   error::Error::{ExpectedFound, IncorrectDelim, InvalidLabel, UnexpectedSectionEnd, UnclosedDelim}
 };
-use whitespace::*;
+use whitespace::{skip0, skip1, skip_no_nl0, skip_no_nl1};
 use source::*;
 use super::*;
-use crate::options::OptionKind;
+use crate::options::{OptionKind, OPTIONS};
+use crate::error::Error::{Unexpected, Missing};
+use crate::error::MissingError;
 
 // todo: make typedef for Errors
-type InputType<'a> = LSpan<'a>;
 
 // trait Parser<'a>: NomParser<InputType<'a>, InputType<'a>, Errors> {}
 
@@ -118,7 +119,6 @@ pub fn section_one(i: InputType) -> SResult {
       parse_code_block,
       parse_include,
       parse_option,
-
       /* state */
 
       // Separating the next two ensures that `parse_code_block` has an opportunity to see the
@@ -141,63 +141,128 @@ Expression on a new line of the form:
 
 The phrase `%include` following by one or more optionally quoted file names.
 */
-fn parse_option(i: InputType) -> NomResult<InputType, Vec<OptionField>, Errors> {
-
+fn parse_option(i: InputType) -> SResult {
   let (input, _) = terminated(parse_keyword("option"), space0)(i)?;
 
-
-
-  alt((
-    // tab=4 namespace="ChickenScanner"
-    terminated(
-      separated_pair(
-        is_not(" \t=\n"),
-        delimited(space0, tag("="), space0),
-        parse_name
-      ),
-      space0
-    ),
-
-    // Negated option:  noline nodebug
-    delimited(tag("no"), is_not(" \t=\n"), space0),
-
-    // A non-negated option
-    terminated(is_not(" \t=\n"), space0)
-  ))
-
+  map(
+  many1(
+    alt((
+      // tab=4 namespace="ChickenScanner"
+      option_with_value,
+      // Boolean option (line debug) or negated option (noline nodebug)
+      option_boolean,
+    ))
+  ),
+    | mut options | {
+      options.drain_filter(| x | x.is_some())
+             .map(| x | SectionItem::Option(x.unwrap()))
+             .collect()
+    }
+  )(input)
 }
 
+fn option_boolean(i: InputType) -> NomResult<InputType, Option<OptionField>, Errors> {
+  let (rest, (negated, key)) =
+      terminated(pair(opt(tag("no")), is_not(" \t=\n")), space0)(i)?;
+
+  match OPTIONS.get(key.fragment().to_lowercase().as_str()) {
+
+    | Some(OptionKind::String(_))
+    | Some(OptionKind::Number(_)) => {
+      let span_start = key.fragment().len();
+      Err(NomErr::Failure(Errors::from(
+        Missing(MissingError::new(
+          "value assignment",
+          i.slice(span_start..span_start),
+          Some("This option requires a value.")
+        ))
+      )))
+    }
+
+    Some(OptionKind::NegatedBool(field)) => Ok((rest, Some(field(false)) )),
+    Some(OptionKind::Bool(field)) => Ok((rest, Some(field(true))  )),
+
+    Some(OptionKind::Legacy) => {
+      println!("The option {} is a legacy option. Ignoring.", key);
+      Ok((rest, None))
+    }
+
+    Some(OptionKind::Unimplemented) => {
+      println!("The option {} is not implemented. Ignoring.", key);
+      Ok((rest, None))
+    }
+
+    None => {
+      let span_end = key.fragment().len() + if negated.is_some() {
+        2
+      } else {
+        0
+      };
+      Err(NomErr::Failure(Errors::from(
+        Unexpected(UnexpectedError::new("unknown option", i.slice(0..span_end), None))
+      )))
+    }
+  }
+}
 
 /// Parses expressions of the form:  tab=4 namespace="ChickenScanner"
-fn option_with_value(input: InputType) -> NomResult<InputType, OptionField, Errors>{
-  let (rest, (key, value)) = terminated(
-    separated_pair(
+fn option_with_value(input: InputType) -> NomResult<InputType, Option<OptionField>, Errors> {
+  let (rest, (key, sep, value)) = terminated(
+    tuple((
       is_not(" \t=\n"),
       delimited(space0, tag("="), space0),
-      parse_name
-    ),
+      is_not(" \t=\n"),
+    )),
     space0
   )(input)?;
 
-  let field = match OPTIONS.get(key) {
+  match OPTIONS.get(key.fragment().to_lowercase().as_str()) {
     Some(OptionKind::String(field)) => {
-      field.0 = value;
-    },
-    Some(OptionKind::Bool(field)) => {
+      let (_, v) = parse_name(value)?;
+      Ok((rest, Some(field(v)) ))
+    }
 
-    },
     Some(OptionKind::Number(field)) => {
+      let result = value.fragment().parse::<u8>();
+      if result.is_err() {
+        Err(NomErr::Failure(Errors::from(
+          ExpectedFound(ExpectedFoundError::new("number", "cannot parse as a number", value))
+        )))
+      } else {
+        Ok((rest, Some(field(result.unwrap())) ))
+      }
+    }
 
-    },
-    Some(OptionKind::Legacy(field)) => {
+    | Some(OptionKind::NegatedBool(_field))
+    | Some(OptionKind::Bool(_field)) => {
+      let span_start = key.fragment().len();
+      let span_end = span_start + sep.fragment().len() + value.fragment().len();
+      Err(NomErr::Failure(Errors::from(
+        Unexpected(UnexpectedError::new(
+          "assignment",
+          input.slice(span_start..span_end),
+          Some("This is a binary option and thus takes no value.")
+        ))
+      )))
+    }
+
+    Some(OptionKind::Legacy) => {
       println!("The option {} is a legacy option. Ignoring.", key);
-      field
-    },
-    Some(OptionKind::Unimplemented(field)) => {
+      Ok((rest, None))
+    }
+
+    Some(OptionKind::Unimplemented) => {
       println!("The option {} is not implemented. Ignoring.", key);
-      field
-    },
-  };
+      Ok((rest, None))
+    }
+
+    None => {
+      let span_end = key.offset(&rest) + key.fragment().len();
+      Err(NomErr::Failure(Errors::from(
+        Unexpected(UnexpectedError::new("unknown option", input.slice(0..span_end), None))
+      )))
+    }
+  }
 }
 
 
@@ -266,7 +331,7 @@ fn parse_code_block(i: InputType) -> SResult {
       fold_many1(
         recognize(preceded(is_a("\t "), pair(not_line_ending, line_ending))),
         SectionItemSet::default(),
-        | mut acc, mut next: InputType | {
+        |mut acc, mut next: InputType| {
           merge_or_push_item(&mut acc, SectionItem::User(next.to_span()));
           acc
         }
@@ -330,7 +395,6 @@ fn parse_code_block(i: InputType) -> SResult {
         },
       ),
     )),
-
     |item| item
   )(i)
 }
@@ -433,7 +497,7 @@ pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'
         ),
 
         // A closing brace. Make sure it matches.
-        map_res(terminated(tag("}"), peek(opt(is_a(" \t\n")))  ),
+        map_res(terminated(tag("}"), peek(opt(is_a(" \t\n")))),
                 |input: InputType| {
                   if item_type.close_delimiter() != "}" {
                     // Always an error.
@@ -541,8 +605,8 @@ fn parse_keyword(keyword: &'static str) -> impl Fn(InputType) -> Result {
     let c_next = c.next();
     let k_next = k.next();
     if c_next.is_none() ||
-       k_next.is_none() ||
-       c_next.unwrap().to_lowercase() != k_next.unwrap().to_lowercase()
+        k_next.is_none() ||
+        c_next.unwrap().to_lowercase().next() != k_next.unwrap().to_lowercase().next()
     {
       return Err(NomErr::Error(Errors::from_error_kind(input, ErrorKind::Tag)));
     }
@@ -641,7 +705,7 @@ fn parse_name(i: InputType) -> NomResult<InputType, String, Errors> {
   )(i)
 }
 
-
+#[allow(unused_variables)]
 fn report(l_span: InputType, item_type: ItemType) {
   // println!(">>>> {}: {} at line {}, col {}, {}",
   //          item_type,

@@ -19,7 +19,7 @@ nom = "5.1.2"
 # Nom input type with location information.
 nom_locate = "2.0.0"
 smallvec = "1.4.2"
-phf = "0.8.0" # Static HashMap
+phf = { version = "0.8.0", features = ["macros"] } # Static HashMap
 
 #lazy_static    = "1.4.0"
 #macro-attr     = {git = "https://github.com/DanielKeep/rust-custom-derive.git"}

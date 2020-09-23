@@ -10,23 +10,24 @@ use codespan_reporting::diagnostic::{Diagnostic, Label};
 use super::ToDiagnostic;
 use crate::parser::ToSpan;
 
-/// Error that occurs when an unexpected token was found.
+/// Error that occurs when an unexpected token was found
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnexpectedError {
-  /// Printable name of the token that was found.
+pub struct MissingError {
+  /// Printable name of the token that is missing
   pub token: &'static str,
-  /// Span of the found token.
+  /// Span of where the token was expected to be
   pub span: Span,
-  // Optional explanation
-  pub explanation: Option<&'static str>
+  /// An optional explanation of what is required
+  pub explanation: Option<&'static str>,
 }
 
-impl UnexpectedError {
-  /// Constructs a new `UnexpectedError`.
+impl MissingError {
+  /// Constructs a new `MissingError`.
   pub fn new<S>(token: &'static str, span: S, explanation: Option<&'static str>) -> Self
-    where S: ToSpan,
+    where
+        S: ToSpan,
   {
-    UnexpectedError {
+    MissingError {
       token,
       span: span.to_span(),
       explanation
@@ -34,22 +35,23 @@ impl UnexpectedError {
   }
 }
 
-impl Display for UnexpectedError {
+impl Display for MissingError {
   fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
     if let Some(explain) = self.explanation {
-      write!(fmt, "unexpected token: {}\n{}", self.token, explain)
+      write!(fmt, "missing: {}\n{}", self.token, explain)
     } else {
-      write!(fmt, "unexpected token: {}", self.token)
+      write!(fmt, "missing: {}", self.token)
     }
   }
 }
 
-impl Error for UnexpectedError {}
+impl Error for MissingError {}
 
-impl ToDiagnostic for UnexpectedError {
+impl ToDiagnostic for MissingError {
   fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
-    let labels =
-        vec![Label::primary(file, self.span).with_message("found unexpected token here")];
+    let mut labels =
+        vec![Label::primary(file, self.span).with_message("missing here")];
+
     Diagnostic::error().with_message(self.to_string()).with_labels(labels)
   }
 }

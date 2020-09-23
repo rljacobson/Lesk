@@ -1,10 +1,13 @@
 #![feature(iterator_fold_self)]
+#![feature(drain_filter)]
 /*!
 
 Utilities to parse a lexer specification file and create an abstract representation of the files
 contents.
 
 */
+#[macro_use]
+extern crate phf;
 
 mod options;
 mod specification;

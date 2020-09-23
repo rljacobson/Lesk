@@ -7,7 +7,7 @@ use std::fmt::Display;
 use nom::lib::std::fmt::Formatter;
 
 use crate::mergable::{Mergable, Merged, merge_or_append_items, merge_or_push_item};
-use crate::options::OptionSet;
+use crate::options::OptionField;
 use crate::parser::{Span, ToSpan};
 
 use super::{Code, SourceFile};
@@ -21,7 +21,7 @@ pub enum ItemType {
   Unknown,
   Include,
   State,
-  Options,
+  Option,
 }
 
 impl Display for ItemType{
@@ -34,7 +34,7 @@ impl Display for ItemType{
           ItemType::User => "ItemType::User",
           ItemType::Unknown => "ItemType::Unknown",
           ItemType::Include => "ItemType::Include",
-          ItemType::Options => "ItemType::Options",
+          ItemType::Option => "ItemType::Option",
           ItemType::State => "ItemType::State",
         };
 
@@ -56,7 +56,7 @@ impl ItemType {
       _ => {
         unreachable!("Cannot use ItemType::new to create an Options, Include, or State.");
       }
-      // ItemType::Options => SectionItem::options_code(item),
+      // ItemType::Option => SectionItem::options_code(item),
       // ItemType::Include => SectionItem::Include(item),
       // ItemType::State => SectionItem::State(item)
     }
@@ -88,7 +88,7 @@ impl ItemType {
       ItemType::User => "%{",
       ItemType::Unknown => "{",
       ItemType::Include => "%include",
-      ItemType::Options => "%options",
+      ItemType::Option => "%options",
 
       ItemType::State => {
         // This method is never called on `SectionItem::State`
@@ -106,7 +106,7 @@ impl ItemType {
       | ItemType::Unknown => true,
 
       | ItemType::Include
-      | ItemType::Options
+      | ItemType::Option
       | ItemType::State => false
     }
   }
@@ -122,7 +122,7 @@ impl ItemType {
       ItemType::User => "%}",
 
       | ItemType::Include
-      | ItemType::Options
+      | ItemType::Option
       | ItemType::State => ""
     }
   }
@@ -145,7 +145,7 @@ pub enum SectionItem {
     is_exclusive: bool,
     code: Span,
   },
-  Options(OptionSet),
+  Option(OptionField),
 }
 
 impl Display for SectionItem {
@@ -179,8 +179,8 @@ impl Display for SectionItem {
           } => {
             format!("State{{is_exlusive: {:?}, code={:?} }}", is_exclusive, code)
           }
-          SectionItem::Options(option_set) => {
-            format!("Options:\n{:?}", option_set)
+          SectionItem::Option(option) => {
+            format!("Options:\n{:?}", *option)
           }
         };
 
@@ -218,7 +218,7 @@ impl SectionItem {
       SectionItem::User(_) => ItemType::User,
       SectionItem::Unknown(_) => ItemType::Unknown,
       SectionItem::Include { .. } => ItemType::Include,
-      SectionItem::Options(_) => ItemType::Options,
+      SectionItem::Option(_) => ItemType::Option,
       SectionItem::State { .. } => ItemType::State,
     }
   }
@@ -246,7 +246,7 @@ impl SectionItem {
       | SectionItem::Unknown(code) => Some(code),
 
       | SectionItem::Include { .. }
-      | SectionItem::Options(_) => {
+      | SectionItem::Option(_) => {
         None
       }
     }
@@ -265,7 +265,7 @@ impl ToSpan for SectionItem {
       | SectionItem::Unknown(code) => *code,
 
       | SectionItem::Include { .. }
-      | SectionItem::Options(_) => {
+      | SectionItem::Option(_) => {
         panic!("Tried to turn {} into code.", self);
       }
     }
@@ -319,7 +319,7 @@ impl Mergable for SectionItem {
 
         | SectionItem::State{..}
         | SectionItem::Include{..}
-        | SectionItem::Options(_) => Merged::No(self, other)
+        | SectionItem::Option(_) => Merged::No(self, other)
 
       } // end match self
 

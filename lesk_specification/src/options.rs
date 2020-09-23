@@ -1,5 +1,8 @@
+#[macro_use]
+use phf::{map, Map};
 use structopt::StructOpt;
 
+use crate::parser::InputType;
 use OptionField::*; // Enum defined below
 
 
@@ -14,16 +17,16 @@ pub enum OptionValue<'a> {
 }
 
 pub enum OptionKind {
-  String(OptionField),
-  Bool(OptionField),
-  NegatedBool(OptionField),
-  Number(OptionField),
-  Legacy(OptionField),
-  Unimplemented(OptionField),
+  String(fn(String) -> OptionField),
+  Bool(fn(bool) -> OptionField),
+  NegatedBool(fn(bool) -> OptionField),
+  Number(fn(u8) -> OptionField),
+  Legacy,
+  Unimplemented,
 }
 
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, )]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum OptionField {
   // Scanner
   InFile(String),
@@ -186,6 +189,11 @@ pub struct Options {
   /// write the scanner's regular expression patterns to FILE.txt
   pub regexp_file: Option<Option<String>>,
 
+  #[structopt(long)]
+  /// override Lesk's decision as to whether you use the options, either by setting them (e.g.,
+  /// %option reject) to indicate the feature is indeed used
+  pub reject: bool,
+
   #[structopt(short = "t", long)]
   /// write scanner on stdout instead of lex.yy.cpp
   pub stdout: bool,
@@ -222,17 +230,17 @@ pub struct Options {
   /// generate main() to invoke lex() or yylex() once
   pub main: bool,
 
-  #[structopt(short = "L", long)]
+  #[structopt(short = "L", long="noline")]
   /// suppress #line directives in scanner
-  pub noline: bool,
+  pub line: bool,
 
   #[structopt(short = "P", long)]
   /// use NAME as prefix of the FlexLexer class name and its members
   pub prefix: Option<String>,
 
-  #[structopt(long)]
+  #[structopt(long="nostdinit")]
   /// initialize input to std::cin instead of stdin
-  pub nostdinit: bool,
+  pub stdinit: bool,
 
   #[structopt(long)]
   /// generate global yylex() scanner, yytext, yyleng, yylineno
@@ -270,9 +278,9 @@ pub struct Options {
   /// same as --flex and --bison, also generate global yyin, yyout
   pub yy: bool,
 
-  #[structopt(long)]
+  #[structopt(long="noyywrap")]
   /// do not call global yywrap() on EOF, requires option --flex
-  pub noyywrap: bool,
+  pub yywrap: bool,
 
   #[structopt(long)]
   /// use exception VALUE to throw in the default rule of the scanner
@@ -293,26 +301,26 @@ pub struct Options {
   /// scanner reports detailed performance statistics to stderr
   pub perf_report: bool,
 
-  #[structopt(short = "s", long)]
+  #[structopt(short = "s", long="nodefault")]
   /// disable the default rule in scanner that echoes unmatched text
-  pub nodefault: bool,
+  pub default: bool,
 
   #[structopt(short, long)]
   /// report summary of scanner statistics to stdout
   pub verbose: bool,
 
-  #[structopt(short = "w", long)]
+  #[structopt(short = "w", long="nowarn")]
   /// do not generate warnings
-  pub nowarn: bool,
+  pub warn: bool,
   // endregion
 
   // region Obsolete or Unsettable
 
-  #[structopt(name = "c++", skip)]
+  #[structopt(long)]
   /// n/a
   pub cpp: bool,
 
-  #[structopt(skip)]
+  #[structopt(long)]
   /// n/a
   pub lex_compat: bool,
 
@@ -321,27 +329,23 @@ pub struct Options {
   // default
   // pub never_interactive: bool,
 
-  #[structopt(skip)]
+  #[structopt(long="nounistd")]
   /// n/a
-  pub nounistd: bool,
+  pub unistd: bool,
 
-  #[structopt(skip)]
+  #[structopt(long)]
   /// n/a
   pub posix_compat: bool,
 
-  #[structopt(skip)]
+  #[structopt(long)]
   /// n/a
   pub stack: bool,
 
-  #[structopt(skip)]
-  /// default
-  pub warn: bool,
-
-  #[structopt(skip)]
+  #[structopt(long)]
   /// Compute the line number while parsing - default
   pub yylineno: bool,
 
-  #[structopt(skip)]
+  #[structopt(long)]
   /// default
   pub yymore: bool,
 
@@ -358,59 +362,58 @@ impl Options {
         InFile(_) => { /* in_file cannot change. */ }
         Legacy(_) => { /* pass */ }
 
-        Batch(v)            => { self.batch              = v;             }
-        Bison(v)            => { self.bison              = v;             }
-        BisonBridge(v)      => { self.bison_bridge       = v;             }
-        BisonCc(v)          => { self.bison_cc           = v;             }
-        BisonCcNamespace(v) => { self.bison_cc_namespace = Some(v);       }
-        BisonCcParser(v)    => { self.bison_cc_parser    = Some(v);       }
-        BisonComplete(v)    => { self.bison_complete     = v;             }
-        BisonLocations(v)   => { self.bison_locations    = v;             }
-        CaseInsensitive(v)  => { self.case_insensitive   = v;             }
-        Class(v)            => { self.class              = Some(v);       }
-        Cpp(v)              => { self.cpp                = v;             }
-        Debug(v)            => { self.debug              = v;             }
-        Default(v)          => { self.nodefault          = v;             }
-        Dotall(v)           => { self.dotall             = v;             }
-        Exception(v)        => { self.exception          = Some(v);       }
-        Fast(v)             => { self.fast               = v;             }
-        Find(v)             => { self.find               = v;             }
-        Flex(v)             => { self.flex               = v;             }
-        Freespace(v)        => { self.freespace          = v;             }
-        Full(v)             => { self.full               = v;             }
-        GraphsFile(v)       => { self.graphs_file        = Some(Some(v)); }
-        Include(v)          => { self.include            = Some(v);       }
-        Interactive(v)      => { self.interactive        = v;             }
-        Lex(v)              => { self.lex                = Some(v);       }
-        LexCompat(v)        => { self.lex_compat         = v;             }
-        Lexer(v)            => { self.lexer              = Some(v);       }
-        Line(v)             => {self.line                = v              }
-        Main(v)             => { self.main               = v;             }
-        Namespace(v)        => { self.namespace          = Some(v);       }
-        OutFile(v)          => { self.out_file           = Some(v);       }
-        Pattern(v)          => { self.pattern            = Some(v);       }
-        PerfReport(v)       => { self.perf_report        = v;             }
-        PosixCompat(v)      => { self.posix_compat       = v;             }
-        Prefix(v)           => { self.prefix             = Some(v);       }
-        Reentrant(v)        => { self.reentrant          = v;             }
-        RegexpFile(v)       => { self.regexp_file        = Some(Some(v)); }
-        Reject(v)           => {self.reject              = v              }
-        Stack(v)            => { self.stack              = v;             }
-        Stdinit(v)          => { self.nostdinit          = v;             }
-        Stdout(v)           => { self.stdout             = v;             }
-        TablesFile(v)       => { self.tables_file        = Some(Some(v)); }
-        Tabs(v)             => { self.tabs               = v;             }
-        TokenType(v)        => { self.token_type         = Some(v);       }
-        Unicode(v)          => { self.unicode            = v;             }
-        Unistd(v)           => { self.nounistd           = v;             }
-        Verbose(v)          => { self.verbose            = v;             }
-        Warn(v)             => { self.warn               = v;             }
-        Yy(v)               => { self.yy                 = v;             }
-        Yyclass(v)          => { self.yyclass            = Some(v);       }
-        Yylineno(v)         => { self.yylineno           = v;             }
-        Yymore(v)           => { self.yymore             = v;             }
-        Yywrap(v)           => { self.noyywrap           = v;             }
-
+        Batch(v) => { self.batch = v; }
+        Bison(v) => { self.bison = v; }
+        BisonBridge(v) => { self.bison_bridge = v; }
+        BisonCc(v) => { self.bison_cc = v; }
+        BisonCcNamespace(v) => { self.bison_cc_namespace = Some(v); }
+        BisonCcParser(v) => { self.bison_cc_parser = Some(v); }
+        BisonComplete(v) => { self.bison_complete = v; }
+        BisonLocations(v) => { self.bison_locations = v; }
+        CaseInsensitive(v) => { self.case_insensitive = v; }
+        Class(v) => { self.class = Some(v); }
+        Cpp(v) => { self.cpp = v; }
+        Debug(v) => { self.debug = v; }
+        Default(v) => { self.default = v; }
+        Dotall(v) => { self.dotall = v; }
+        Exception(v) => { self.exception = Some(v); }
+        Fast(v) => { self.fast = v; }
+        Find(v) => { self.find = v; }
+        Flex(v) => { self.flex = v; }
+        Freespace(v) => { self.freespace = v; }
+        Full(v) => { self.full = v; }
+        GraphsFile(v) => { self.graphs_file = Some(Some(v)); }
+        Include(v) => { self.include = Some(v); }
+        Interactive(v) => { self.interactive = v; }
+        Lex(v) => { self.lex = Some(v); }
+        LexCompat(v) => { self.lex_compat = v; }
+        Lexer(v) => { self.lexer = Some(v); }
+        Line(v) => { self.line = v }
+        Main(v) => { self.main = v; }
+        Namespace(v) => { self.namespace = Some(v); }
+        OutFile(v) => { self.out_file = Some(v); }
+        Pattern(v) => { self.pattern = Some(v); }
+        PerfReport(v) => { self.perf_report = v; }
+        PosixCompat(v) => { self.posix_compat = v; }
+        Prefix(v) => { self.prefix = Some(v); }
+        Reentrant(v) => { self.reentrant = v; }
+        RegexpFile(v) => { self.regexp_file = Some(Some(v)); }
+        Reject(v) => { self.reject = v }
+        Stack(v) => { self.stack = v; }
+        Stdinit(v) => { self.stdinit = v; }
+        Stdout(v) => { self.stdout = v; }
+        TablesFile(v) => { self.tables_file = Some(Some(v)); }
+        Tabs(v) => { self.tabs = v; }
+        TokenType(v) => { self.token_type = Some(v); }
+        Unicode(v) => { self.unicode = v; }
+        Unistd(v) => { self.unistd = v; }
+        Verbose(v) => { self.verbose = v; }
+        Warn(v) => { self.warn = v; }
+        Yy(v) => { self.yy = v; }
+        Yyclass(v) => { self.yyclass = Some(v); }
+        Yylineno(v) => { self.yylineno = v; }
+        Yymore(v) => { self.yymore = v; }
+        Yywrap(v) => { self.yywrap = v; }
       } // end match
     } // end for
   }
@@ -418,113 +421,114 @@ impl Options {
 
 // todo: Is this the right representation? Struct better?
 // todo: figure out which will be implemented, which are unsettable, and which are legacy.
-static OPTIONS: phf::Map<&'static str, OptionField> = phf_map! {
+pub static OPTIONS: phf::Map<&'static str, OptionKind> = phf_map! {
+
   "caseless"           => OptionKind::Bool(CaseInsensitive),
-  "case-insensitive"   => OptionKind::Bool(CaseInsensitive(true)),
-  "caseful"            => OptionKind::Bool(CaseInsensitive(false)),
-  "case-sensitive"     => OptionKind::Bool(CaseInsensitive(false)),
-  "7bit"               => OptionKind::Legacy(Legacy("7bit")),
-  "8bit"               => OptionKind::Legacy(Legacy("8bit")),
-  "align"              => OptionKind::Legacy(Legacy("align")),
-  "always-interactive" => OptionKind::Bool(Interactive(true)),
-  "array"              => OptionKind::Legacy(Legacy("array")),
-  "backup"             => OptionKind::Legacy(Legacy("backup")),
-  "batch"              => OptionKind::Bool(Batch(true)),
-  "bison"              => OptionKind::Bool(Bison(false)),
-  "bison_bridge"       => OptionKind::Bool(BisonBridge(false)),
-  "bison_cc"           => OptionKind::Bool(BisonCc(false)),
-  "bison_cc_namespace" => OptionKind::String(BisonCcNamespace("")),
-  "bison_cc_parser"    => OptionKind::String(BisonCcParser("")),
-  "bison_complete"     => OptionKind::Bool(BisonComplete(false)),
-  "bison_locations"    => OptionKind::Bool(BisonLocations(false)),
-  "c++"                => OptionKind::Bool(Cpp(false)),
-  "class"              => OptionKind::String(Class("")),
-  "ctorarg"            => OptionKind::Legacy(Legacy("ctorarg")),
-  "debug"              => OptionKind::Bool(Debug(true)),
-  "default"            => OptionKind::Bool(Default(false)),
-  "dotall"             => OptionKind::Bool(Dotall(false)),
-  "ecs"                => OptionKind::Legacy(Legacy("ecs")),
-  "exception"          => OptionKind::String(Exception("")),
-  "extra-type"         => OptionKind::Legacy(Legacy("extra-type")),
-  "fast"               => OptionKind::Bool(Fast(false)),
-  "find"               => OptionKind::Bool(Find(false)),
-  "flex"               => OptionKind::Bool(Flex(true)),
-  "freespace"          => OptionKind::Bool(Freespace(false)),
-  "full"               => OptionKind::Bool(Full(false)),
-  "graphs_file"        => OptionKind::String(GraphsFile("")),
-  "header_file"        => OptionKind::Legacy(Legacy("header_file")),
-  "include"            => OptionKind::String(Include("")),
-  "indent"             => OptionKind::Legacy(Legacy("indent")),
-  "input"              => OptionKind::Legacy(Legacy("input")),
-  "interactive"        => OptionKind::Bool(Interactive(false)),
-  "lex"                => OptionKind::String(Lex("")),
-  "lex-compat"         => OptionKind::Bool(LexCompat(false)),
-  "lexer"              => OptionKind::String(Lexer("")),
-  "line"               => OptionKind::Bool(Line(true)),
-  "main"               => OptionKind::Bool(Main(true)),
-  "matcher"            => OptionKind::Legacy(Legacy("matcher")),
-  "meta-ecs"           => OptionKind::Legacy(Legacy("meta-ecs")),
-  "namespace"          => OptionKind::String(Namespace("")),
-  "never-interactive"  => OptionKind::Bool(Interactive(false)),
-  "outfile"            => OptionKind::String(OutFile("")),
-  "params"             => OptionKind::Legacy(Legacy("params")),
-  "pattern"            => OptionKind::String(Pattern("")),
-  "perf-report"        => OptionKind::Bool(PerfReport(true)),
-  "permissive"         => OptionKind::Legacy(Legacy("permissive")),
-  "pointer"            => OptionKind::Legacy(Legacy("pointer")),
-  "posix-compat"       => OptionKind::Legacy(Legacy("posix-compat")),
-  "prefix"             => OptionKind::String(Prefix("")),
-  "read"               => OptionKind::Legacy(Legacy("read")),
-  "reentrant"          => OptionKind::Bool(Reentrant(true)),
-  "regexp_file"        => OptionKind::String(RegexpFile("")),
-  "reject"             => OptionKind::Bool(Reject(true)),
-  "stack"              => OptionKind::Bool(Stack(true)),
-  "stdinit"            => OptionKind::Bool(Stdinit(false)),
-  "stdout"             => OptionKind::Bool(Stdout(true)),
-  "tables-file"        => OptionKind::String(TablesFile("")),
-  "tables-verify"      => OptionKind::Legacy(Legacy("tables-verify")),
-  "tablesext"          => OptionKind::Legacy(Legacy("tablesext")),
-  "tabs"               => OptionKind::Number(Tabs(DEFAULT_TAB_WIDTH)),
-  "token_eof"          => OptionKind::Legacy(Legacy("token_eof")),
-  "token_type"         => OptionKind::String(TokenType("")),
-  "unicode"            => OptionKind::Bool(Unicode(false)),
-  "unistd"             => OptionKind::Bool(Unistd(false)),
-  "unput"              => OptionKind::Legacy(Legacy("unput")),
-  "verbose"            => OptionKind::Bool(Verbose(true)),
-  "warn"               => OptionKind::Bool(Warn(true)),
-  "yy"                 => OptionKind::Bool(Yy(false)),
-  "yy_pop_state"       => OptionKind::Legacy(Legacy("yy_pop_state")),
-  "yy_push_state"      => OptionKind::Legacy(Legacy("yy_push_state")),
-  "yy_scan_buffer"     => OptionKind::Legacy(Legacy("yy_scan_buffer")),
-  "yy_scan_bytes"      => OptionKind::Legacy(Legacy("yy_scan_bytes")),
-  "yy_scan_string"     => OptionKind::Legacy(Legacy("yy_scan_string")),
-  "yy_top_state"       => OptionKind::Legacy(Legacy("yy_top_state")),
-  "yyalloc"            => OptionKind::Legacy(Legacy("yyalloc")),
-  "yyclass"            => OptionKind::String(Yyclass("")),
-  "yyfree"             => OptionKind::Legacy(Legacy("yyfree")),
-  "yyget_column"       => OptionKind::Legacy(Legacy("yyget_column")),
-  "yyget_debug"        => OptionKind::Legacy(Legacy("yyget_debug")),
-  "yyget_extra"        => OptionKind::Legacy(Legacy("yyget_extra")),
-  "yyget_in"           => OptionKind::Legacy(Legacy("yyget_in")),
-  "yyget_leng"         => OptionKind::Legacy(Legacy("yyget_leng")),
-  "yyget_lineno"       => OptionKind::Legacy(Legacy("yyget_lineno")),
-  "yyget_lloc"         => OptionKind::Legacy(Legacy("yyget_lloc")),
-  "yyget_lval"         => OptionKind::Legacy(Legacy("yyget_lval")),
-  "yyget_out"          => OptionKind::Legacy(Legacy("yyget_out")),
-  "yyget_text"         => OptionKind::Legacy(Legacy("yyget_text")),
-  "yylineno"           => OptionKind::Bool(Yylineno(true)),
-  "yyltype"            => OptionKind::Legacy(Legacy("yyltype")),
-  "yymore"             => OptionKind::Bool(Yymore(true)),
-  "yyrealloc"          => OptionKind::Legacy(Legacy("yyrealloc")),
-  "yyset_column"       => OptionKind::Legacy(Legacy("yyset_column")),
-  "yyset_debug"        => OptionKind::Legacy(Legacy("yyset_debug")),
-  "yyset_extra"        => OptionKind::Legacy(Legacy("yyset_extra")),
-  "yyset_in"           => OptionKind::Legacy(Legacy("yyset_in")),
-  "yyset_lineno"       => OptionKind::Legacy(Legacy("yyset_lineno")),
-  "yyset_lloc"         => OptionKind::Legacy(Legacy("yyset_lloc")),
-  "yyset_lval"         => OptionKind::Legacy(Legacy("yyset_lval")),
-  "yyset_out"          => OptionKind::Legacy(Legacy("yyset_out")),
-  "yystype"            => OptionKind::Legacy(Legacy("yystype")),
-  "yywrap"             => OptionKind::Bool(Yywrap(false)),
+  "case-insensitive"   => OptionKind::Bool(CaseInsensitive),
+  "caseful"            => OptionKind::NegatedBool(CaseInsensitive),
+  "case-sensitive"     => OptionKind::NegatedBool(CaseInsensitive),
+  "7bit"               => OptionKind::Legacy,
+  "8bit"               => OptionKind::Legacy,
+  "align"              => OptionKind::Legacy,
+  "always-interactive" => OptionKind::Bool(Interactive),
+  "array"              => OptionKind::Legacy,
+  "backup"             => OptionKind::Legacy,
+  "batch"              => OptionKind::Bool(Batch),
+  "bison"              => OptionKind::Bool(Bison),
+  "bison_bridge"       => OptionKind::Bool(BisonBridge),
+  "bison_cc"           => OptionKind::Bool(BisonCc),
+  "bison_cc_namespace" => OptionKind::String(BisonCcNamespace),
+  "bison_cc_parser"    => OptionKind::String(BisonCcParser),
+  "bison_complete"     => OptionKind::Bool(BisonComplete),
+  "bison_locations"    => OptionKind::Bool(BisonLocations),
+  "c++"                => OptionKind::Bool(Cpp),
+  "class"              => OptionKind::String(Class),
+  "ctorarg"            => OptionKind::Legacy,
+  "debug"              => OptionKind::Bool(Debug),
+  "default"            => OptionKind::Bool(Default),
+  "dotall"             => OptionKind::Bool(Dotall),
+  "ecs"                => OptionKind::Legacy,
+  "exception"          => OptionKind::String(Exception),
+  "extra-type"         => OptionKind::Legacy,
+  "fast"               => OptionKind::Bool(Fast),
+  "find"               => OptionKind::Bool(Find),
+  "flex"               => OptionKind::Bool(Flex),
+  "freespace"          => OptionKind::Bool(Freespace),
+  "full"               => OptionKind::Bool(Full),
+  "graphs_file"        => OptionKind::String(GraphsFile),
+  "header_file"        => OptionKind::Legacy,
+  "include"            => OptionKind::String(Include),
+  "indent"             => OptionKind::Legacy,
+  "input"              => OptionKind::Legacy,
+  "interactive"        => OptionKind::Bool(Interactive),
+  "lex"                => OptionKind::String(Lex),
+  "lex-compat"         => OptionKind::Bool(LexCompat),
+  "lexer"              => OptionKind::String(Lexer),
+  "line"               => OptionKind::Bool(Line),
+  "main"               => OptionKind::Bool(Main),
+  "matcher"            => OptionKind::Legacy,
+  "meta-ecs"           => OptionKind::Legacy,
+  "namespace"          => OptionKind::String(Namespace),
+  "never-interactive"  => OptionKind::NegatedBool(Interactive),
+  "outfile"            => OptionKind::String(OutFile),
+  "params"             => OptionKind::Legacy,
+  "pattern"            => OptionKind::String(Pattern),
+  "perf-report"        => OptionKind::Bool(PerfReport),
+  "permissive"         => OptionKind::Legacy,
+  "pointer"            => OptionKind::Legacy,
+  "posix-compat"       => OptionKind::Legacy,
+  "prefix"             => OptionKind::String(Prefix),
+  "read"               => OptionKind::Legacy,
+  "reentrant"          => OptionKind::Bool(Reentrant),
+  "regexp_file"        => OptionKind::String(RegexpFile),
+  "reject"             => OptionKind::Bool(Reject),
+  "stack"              => OptionKind::Bool(Stack),
+  "stdinit"            => OptionKind::Bool(Stdinit),
+  "stdout"             => OptionKind::Bool(Stdout),
+  "tables-file"        => OptionKind::String(TablesFile),
+  "tables-verify"      => OptionKind::Legacy,
+  "tablesext"          => OptionKind::Legacy,
+  "tabs"               => OptionKind::Number(Tabs),
+  "token_eof"          => OptionKind::Legacy,
+  "token_type"         => OptionKind::String(TokenType),
+  "unicode"            => OptionKind::Bool(Unicode),
+  "unistd"             => OptionKind::Bool(Unistd),
+  "unput"              => OptionKind::Legacy,
+  "verbose"            => OptionKind::Bool(Verbose),
+  "warn"               => OptionKind::Bool(Warn),
+  "yy"                 => OptionKind::Bool(Yy),
+  "yy_pop_state"       => OptionKind::Legacy,
+  "yy_push_state"      => OptionKind::Legacy,
+  "yy_scan_buffer"     => OptionKind::Legacy,
+  "yy_scan_bytes"      => OptionKind::Legacy,
+  "yy_scan_string"     => OptionKind::Legacy,
+  "yy_top_state"       => OptionKind::Legacy,
+  "yyalloc"            => OptionKind::Legacy,
+  "yyclass"            => OptionKind::String(Yyclass),
+  "yyfree"             => OptionKind::Legacy,
+  "yyget_column"       => OptionKind::Legacy,
+  "yyget_debug"        => OptionKind::Legacy,
+  "yyget_extra"        => OptionKind::Legacy,
+  "yyget_in"           => OptionKind::Legacy,
+  "yyget_leng"         => OptionKind::Legacy,
+  "yyget_lineno"       => OptionKind::Legacy,
+  "yyget_lloc"         => OptionKind::Legacy,
+  "yyget_lval"         => OptionKind::Legacy,
+  "yyget_out"          => OptionKind::Legacy,
+  "yyget_text"         => OptionKind::Legacy,
+  "yylineno"           => OptionKind::Bool(Yylineno),
+  "yyltype"            => OptionKind::Legacy,
+  "yymore"             => OptionKind::Bool(Yymore),
+  "yyrealloc"          => OptionKind::Legacy,
+  "yyset_column"       => OptionKind::Legacy,
+  "yyset_debug"        => OptionKind::Legacy,
+  "yyset_extra"        => OptionKind::Legacy,
+  "yyset_in"           => OptionKind::Legacy,
+  "yyset_lineno"       => OptionKind::Legacy,
+  "yyset_lloc"         => OptionKind::Legacy,
+  "yyset_lval"         => OptionKind::Legacy,
+  "yyset_out"          => OptionKind::Legacy,
+  "yystype"            => OptionKind::Legacy,
+  "yywrap"             => OptionKind::Bool(Yywrap),
 };
 

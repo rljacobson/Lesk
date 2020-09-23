@@ -1,6 +1,7 @@
 //! Error reporting data structures.
 
-// todo: Factor out generic bits to a module at the library root level.
+// todo: Factor out generic bits to a module at the library root level. Alternatively, collapse
+// `*Error` structs into the `Error` enum.
 
 mod expected_found;
 mod incorrect_delim;
@@ -8,6 +9,7 @@ mod unclosed_delim;
 mod unexpected;
 mod invalid_label;
 mod unexpected_section_end;
+mod missing;
 
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -25,6 +27,8 @@ pub use self::unclosed_delim::UnclosedDelimError;
 pub use self::unexpected::UnexpectedError;
 pub use self::invalid_label::InvalidLabelError;
 pub use self::unexpected_section_end::UnexpectedSectionEndError;
+pub use self::missing::MissingError;
+
 use crate::parser::ToSpan;
 
 // todo: update the examples to match new `codespan_reporting` version.
@@ -343,6 +347,8 @@ pub enum Error {
     UnclosedDelim(UnclosedDelimError),
     /// An unexpected token was found.
     Unexpected(UnexpectedError),
+    /// An unexpected token was found.
+    Missing(MissingError),
     /// The section ended inside a code block.
     UnexpectedSectionEnd(UnexpectedSectionEndError),
     /// A custom error with a span and message.
@@ -364,6 +370,7 @@ impl Display for Error {
             Error::IncorrectDelim(ref e) => write!(fmt, "{}", e),
             Error::UnclosedDelim(ref e) => write!(fmt, "{}", e),
             Error::Unexpected(ref e) => write!(fmt, "{}", e),
+            Error::Missing(ref e) => write!(fmt, "{}", e),
             Error::UnexpectedSectionEnd(ref e) => write!(fmt, "{}", e),
             Error::InvalidLabel(ref e) => write!(fmt, "{}", e),
             Error::Message(_, ref e) => write!(fmt, "{}", e),
@@ -418,6 +425,7 @@ impl ToDiagnostic for Error {
             Error::InvalidLabel(ref e) => e.to_diagnostic(file),
             Error::UnclosedDelim(ref e) => e.to_diagnostic(file),
             Error::Unexpected(ref e) => e.to_diagnostic(file),
+            Error::Missing(ref e) => e.to_diagnostic(file),
             Error::UnexpectedSectionEnd(ref e) => e.to_diagnostic(file),
             Error::Message(ref span, ref msg) => {
                 let label = Label::primary(file, *span).with_message(msg.clone());
