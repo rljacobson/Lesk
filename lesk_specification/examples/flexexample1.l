@@ -5,7 +5,9 @@ using namespace std;
 int mylineno = 0;
 %}
 
-%option noyywrap
+%option noline
+
+%include /Users/rljacobson/Development/Lesk/lesk_specification/examples/section1.l
 
 string  \"[^\n"]+\"
 

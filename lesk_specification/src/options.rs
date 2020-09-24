@@ -3,12 +3,13 @@ use phf::{map, Map};
 use structopt::StructOpt;
 
 use crate::parser::InputType;
-use OptionField::*; // Enum defined below
+use OptionField::*;
+use smallvec::SmallVec; // Enum defined below
 
 
 const DEFAULT_TAB_WIDTH: u8 = 2u8;
 
-pub type OptionSet = Vec<OptionField>;
+pub type OptionSet = SmallVec<[OptionField;1]>;
 
 pub enum OptionValue<'a> {
   String(InputType<'a>),

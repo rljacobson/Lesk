@@ -4,6 +4,8 @@
 
 
 use std::io::Read;
+
+//region Use Nom
 use nom::{
   character::complete::{anychar, line_ending, multispace0, crlf, space0},
   AsChar,
@@ -78,6 +80,8 @@ use nom::{
 use nom_locate::LocatedSpan;
 // endregion
 
+use smallvec::SmallVec;
+
 use crate::{
   error::{
     Error,
@@ -99,6 +103,8 @@ use super::*;
 use crate::options::{OptionKind, OPTIONS};
 use crate::error::Error::{Unexpected, Missing};
 use crate::error::MissingError;
+use std::fs::File;
+use nom::multi::fold_many0;
 
 // todo: make typedef for Errors
 
@@ -117,7 +123,7 @@ pub fn section_one(i: InputType) -> SResult {
 
   // Each alternative returns a `SectionOneItemSet`, which are folded into each other.
   terminated(
-    fold_many1(
+    fold_many0(
       alt((
         parse_code_block,
         parse_include,
@@ -132,12 +138,12 @@ pub fn section_one(i: InputType) -> SResult {
       )),
       SectionItemSet::default(),
       |mut acc, mut next| {
-        acc.append(&mut next);
+        acc.extend(&mut next.drain(..));
         acc
       }
     ),
 
-    terminated(tag("%%"), opt(line_ending))
+    opt(terminated(tag("%%"), opt(line_ending)))
 
   )(i)
 }
@@ -148,18 +154,18 @@ A named definition of a regex:
   ID       [a-z][a-z0-9]*
 */
 fn parse_definition(i: InputType) -> SResult {
-  let (rest, (name, sep, regex)) = tuple((
+  let (rest, (name, _sep, regex)) = tuple((
     parse_identifier,
     space1,
     not_line_ending
   ))(i)?;
 
-  let result = vec![
-    SectionItem::Definition {
-      name: name.to_span(),
-      code: regex.to_span()
-    }
-  ];
+  let result = SmallVec::from_elem(
+      SectionItem::Definition {
+        name: name.to_span(),
+        code: regex.to_span()
+      },
+    1);
 
   Ok((rest, result))
 }
@@ -180,12 +186,12 @@ fn parse_state(i: InputType) -> SResult {
     parse_identifier
   )(i)?;
 
-  let result = vec![
+  let result = SmallVec::from_elem(
     SectionItem::State {
       is_exclusive: exclusive,
       name: name.to_span()
     }
-  ];
+  , 1);
 
   Ok((rest, result))
 
@@ -369,7 +375,7 @@ fn parse_code_type(item_type: ItemType) -> impl Fn(InputType) -> PResult {
 
 
 /**
-Parses line(s) of code as found in `%{ %}`, `%top`, `%class`, and `%init`, returning a
+Parses top-level line(s) of code such as `%{ %}`, `%top`, `%class`, and `%init`, returning a
 `SectionOneItemSet`.
 
 There is an interesting question of what to do with input that doesn't make sense but that is
@@ -396,7 +402,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Top),
         |span| {
-          vec![SectionItem::Top(span)]
+          SmallVec::from_elem(SectionItem::Top(span), 1)
         },
       ),
 
@@ -404,7 +410,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Class),
         |span| {
-          vec![SectionItem::Class(span)]
+          SmallVec::from_elem(SectionItem::Class(span), 1)
         },
       ),
 
@@ -412,7 +418,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Init),
         |span| {
-          vec![SectionItem::Init(span)]
+          SmallVec::from_elem(SectionItem::Init(span), 1)
         },
       ),
 
@@ -420,7 +426,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::User),
         |span| {
-          vec![SectionItem::User(span)]
+          SmallVec::from_elem(SectionItem::User(span), 1)
         },
       ),
 
@@ -428,7 +434,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Unknown),
         |span| {
-          vec![SectionItem::Unknown(span)]
+          SmallVec::from_elem(SectionItem::Unknown(span), 1)
         },
       ),
 
@@ -625,15 +631,18 @@ The phrase `%include` following by one or more optionally quoted file names.
 fn parse_include(i: InputType) -> SResult {
   let (rest, files) = preceded(
     parse_keyword("include"),
-    cut(separated_list1(multispace1, parse_filename))
+    cut(separated_list1(space1, parse_filename))
   )(i)?;
+
+  for f in &files{
+    println!("file: {}", f.fragment());
+  }
 
   let included_items = files.iter().map(|in_file| {
     // retrieve and parse the contents of the file
     let mut new_source = String::default();
-    let mut in_file = String::from(*i.fragment());
 
-    std::fs::File::open(&in_file)
+    std::fs::File::open(in_file.fragment())
         .expect(
           // todo: Make a proper diagnostic for this
           format!("Could not read from file: {}", &in_file).as_str()
@@ -655,11 +664,11 @@ fn parse_include(i: InputType) -> SResult {
     }
   }
   ).fold(Vec::new(), |mut acc, mut next| {
-    acc.append(&mut next);
+    acc.extend(&mut next.drain(..));
     acc
   });
 
-  Ok((rest, included_items))
+  Ok((rest, SmallVec::from(included_items)))
 }
 
 // endregion

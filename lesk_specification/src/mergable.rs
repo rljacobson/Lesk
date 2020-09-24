@@ -12,6 +12,7 @@ use std::cmp::{min, max};
 use nom_locate::LocatedSpan;
 use std::fmt::{Display, Debug};
 use nom::Offset;
+use smallvec::SmallVec;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Merged<T, U> {
@@ -128,8 +129,10 @@ impl Mergable for LocatedSpan<T>{
 
 */
 
-pub fn merge_or_push_item<T>(items: &mut Vec<T>, mut item: T) -> &mut Vec<T>
-  where T: Mergable + Display
+pub fn merge_or_push_item<T, A>(items: &mut SmallVec<A>, mut item: T) -> &mut SmallVec<A>
+  where T: Mergable + Display,
+        A: smallvec::Array<Item=T>,
+        // <A as smallvec::Array>::Item
 {
   if items.is_empty() {
     // println!("Empty items while trying to merge with {}", item);

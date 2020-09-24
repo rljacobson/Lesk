@@ -13,6 +13,7 @@ use crate::options::OptionField;
 use crate::parser::{Span, ToSpan};
 
 use super::{Code, SourceFile};
+use smallvec::SmallVec;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum ItemType {
@@ -137,7 +138,7 @@ impl ItemType {
   }
 }
 
-pub type SectionItemSet = Vec<SectionItem>;
+pub type SectionItemSet = SmallVec<[SectionItem;1]>;
 
 #[derive(Clone, Debug)]
 pub enum SectionItem {
@@ -149,7 +150,7 @@ pub enum SectionItem {
   Option(OptionField),
   Include {
     file: SourceFile<String, String>,
-    contents: SectionItemSet,
+    contents: Vec<SectionItem>,
   },
   State {
     is_exclusive: bool,
