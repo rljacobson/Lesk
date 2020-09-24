@@ -32,7 +32,9 @@ pub use self::missing::MissingError;
 use crate::parser::ToSpan;
 use super::FileId;
 
-// todo: update the examples to match new `codespan_reporting` version.
+
+// todo: refactor error framework to be more extensible.
+// todo: update the examples
 
 
 /// Trait for converting error types to pretty-printable diagnostics.
@@ -42,7 +44,7 @@ use super::FileId;
 /// ```
 /// use codespan::{Files, Span};
 /// use codespan_reporting::diagnostic::{Diagnostic, Label};
-/// use nix_parser::error::ToDiagnostic;
+/// use error::ToDiagnostic;
 ///
 /// struct MyError;
 ///
@@ -81,7 +83,7 @@ impl Errors {
     ///
     /// ```
     /// # #![allow(unused_mut)]
-    /// # use nix_parser::error::Errors;
+    /// # use error::Errors;
     /// let mut errors = Errors::new();
     /// ```
     #[inline]
@@ -96,7 +98,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::Errors;
+    /// # use error::Errors;
     /// let errors = Errors::new();
     /// assert_eq!(errors.len(), 0);
     /// ```
@@ -110,7 +112,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::{Errors, UnexpectedError};
+    /// # use error::{Errors, UnexpectedError};
     /// use codespan::Span;
     ///
     /// let mut errors = Errors::new();
@@ -129,7 +131,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::{Errors, ExpectedFoundError};
+    /// # use error::{Errors, ExpectedFoundError};
     /// use codespan::Span;
     ///
     /// let mut errors = Errors::new();
@@ -151,7 +153,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::{Error, Errors, UnexpectedError};
+    /// # use error::{Error, Errors, UnexpectedError};
     /// use codespan::Span;
     ///
     /// let mut errors = Errors::new();
@@ -172,7 +174,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::{Error, Errors, UnexpectedError};
+    /// # use error::{Error, Errors, UnexpectedError};
     /// use codespan::Span;
     ///
     /// let mut empty = Errors::new();
@@ -192,7 +194,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::{Error, Errors, ExpectedFoundError, UnexpectedError};
+    /// # use error::{Error, Errors, ExpectedFoundError, UnexpectedError};
     /// use codespan::Span;
     ///
     /// let mut errors = Errors::new();
@@ -217,7 +219,7 @@ impl Errors {
     /// # Examples
     ///
     /// ```
-    /// # use nix_parser::error::{Errors, ExpectedFoundError};
+    /// # use error::{Errors, ExpectedFoundError};
     /// use codespan::{Files, FileId, Span};
     ///
     /// let mut files = Files::new();

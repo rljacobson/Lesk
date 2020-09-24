@@ -1,4 +1,4 @@
-
+// todo: Remove this module in favor of `From` trait.
 use nom_locate;
 pub use codespan::Span;
 use nom::{Slice, Offset};

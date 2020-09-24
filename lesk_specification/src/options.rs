@@ -26,6 +26,8 @@ pub enum OptionKind {
 }
 
 
+// todo: Not all of these options are used. Replace the unused options with Unimplemented/Legacy
+//       OptionKind.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum OptionField {
   // Scanner

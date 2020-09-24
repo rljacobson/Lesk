@@ -2,6 +2,8 @@
 Representations of the various items that can appear in Section 1, the definitions section.
 */
 
+// todo: Cut dead code.
+
 use std::fmt::Display;
 
 use nom::lib::std::fmt::Formatter;
@@ -21,6 +23,7 @@ pub enum ItemType {
   Unknown,
   Include,
   State,
+  Definition,
   Option,
 }
 
@@ -36,6 +39,7 @@ impl Display for ItemType{
           ItemType::Include => "ItemType::Include",
           ItemType::Option => "ItemType::Option",
           ItemType::State => "ItemType::State",
+          ItemType::Definition => {"ItemType::Definition"}
         };
 
     write!(f, "{}", name)
@@ -54,7 +58,8 @@ impl ItemType {
       ItemType::Unknown => SectionItem::unknown_code(item.to_span()),
 
       _ => {
-        unreachable!("Cannot use ItemType::new to create an Options, Include, or State.");
+        unreachable!("Cannot use ItemType::new to create an Options, Include, State, or Definition\
+        .");
       }
       // ItemType::Option => SectionItem::options_code(item),
       // ItemType::Include => SectionItem::Include(item),
@@ -71,7 +76,8 @@ impl ItemType {
       ItemType::Unknown => SectionItem::Unknown(code),
 
       _ => {
-        unreachable!("Cannot use ItemType::from_code to create an Options, Include, or State.");
+        unreachable!("Cannot use ItemType::from_code to create an Options, Include, State, or \
+        Definition.");
       }
 
     }
@@ -91,6 +97,10 @@ impl ItemType {
         // This method is never called on `SectionItem::State`
         panic! {"SectionItem::State has multiple opening delimiters."};
       }
+      ItemType::Definition => {
+        // This method is never called on `SectionItem::Definition`
+        panic! {"SectionItem::State has no opening delimiter."};
+      }
     }
   }
 
@@ -104,7 +114,8 @@ impl ItemType {
 
       | ItemType::Include
       | ItemType::Option
-      | ItemType::State => false
+      | ItemType::Definition
+      | ItemType::State => false,
     }
   }
 
@@ -120,6 +131,7 @@ impl ItemType {
 
       | ItemType::Include
       | ItemType::Option
+      | ItemType::Definition
       | ItemType::State => ""
     }
   }
@@ -134,15 +146,19 @@ pub enum SectionItem {
   Class(Span),
   Init(Span),
   Unknown(Span),
+  Option(OptionField),
   Include {
     file: SourceFile<String, String>,
     contents: SectionItemSet,
   },
   State {
     is_exclusive: bool,
+    name: Span,
+  },
+  Definition {
+    name: Span,
     code: Span,
   },
-  Option(OptionField),
 }
 
 impl Display for SectionItem {
@@ -172,12 +188,18 @@ impl Display for SectionItem {
           }
           SectionItem::State {
             is_exclusive,
-            code
+            name: code
           } => {
             format!("State{{is_exlusive: {:?}, code={:?} }}", is_exclusive, code)
           }
+          SectionItem::Definition {
+            name,
+            code,
+          } => {
+            format!("Definition{{name: {:?}, regex={:?} }}", name, code)
+          }
           SectionItem::Option(option) => {
-            format!("Options:\n{:?}", *option)
+            format!("Options: {:?}", *option)
           }
         };
 
@@ -217,6 +239,7 @@ impl SectionItem {
       SectionItem::Include { .. } => ItemType::Include,
       SectionItem::Option(_) => ItemType::Option,
       SectionItem::State { .. } => ItemType::State,
+      SectionItem::Definition { .. } => ItemType::Definition,
     }
   }
 
@@ -239,10 +262,11 @@ impl SectionItem {
       | SectionItem::Top(code)
       | SectionItem::Class(code)
       | SectionItem::Init(code)
-      | SectionItem::State { code, .. }
+      | SectionItem::State { name: code, .. }
       | SectionItem::Unknown(code) => Some(code),
 
       | SectionItem::Include { .. }
+      | SectionItem::Definition { .. }
       | SectionItem::Option(_) => {
         None
       }
@@ -258,10 +282,11 @@ impl ToSpan for SectionItem {
       | SectionItem::Top(code)
       | SectionItem::Class(code)
       | SectionItem::Init(code)
-      | SectionItem::State { code, .. }
+      | SectionItem::State { name: code, .. }
       | SectionItem::Unknown(code) => *code,
 
       | SectionItem::Include { .. }
+      | SectionItem::Definition { .. }
       | SectionItem::Option(_) => {
         panic!("Tried to turn {} into code.", self);
       }
@@ -315,6 +340,7 @@ impl Mergable for SectionItem {
         }
 
         | SectionItem::State{..}
+        | SectionItem::Definition { .. }
         | SectionItem::Include{..}
         | SectionItem::Option(_) => Merged::No(self, other)
 

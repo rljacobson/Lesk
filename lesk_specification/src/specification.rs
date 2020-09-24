@@ -217,6 +217,8 @@ impl<'s> Specification<'s> {
           println!("{}", item);
         }
 
+        // todo: Act on the results.
+
       },
 
       Err(NomErr::Error(e)) => {
@@ -237,10 +239,13 @@ impl<'s> Specification<'s> {
 
         }
       }
+
       Err(NomErr::Incomplete(_)) => {
         panic!("Got a nom incomplete error.");
       }
+
     }
+
 
   }
 

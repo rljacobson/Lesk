@@ -68,7 +68,7 @@ use crate::{
 };
 
 use super::*;
-use nom::character::complete::space1;
+use nom::character::complete::{space1, anychar};
 
 
 // todo: make typedef for Errors
@@ -175,7 +175,7 @@ pub fn eol_comment<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
 {
   value(
     (), // Output is thrown away.
-    pair(tag("//"), is_not("\n\r")),
+    pair(tag("//"), not_line_ending),
   )(i)
 }
 
@@ -189,7 +189,8 @@ pub fn inline_comment<'a, E: ParseError<InputType<'a>>>(i: InputType<'a>)
     (),
     tuple((
       tag("/*"),
-      take_until("*/"),
+      escaped(is_not("*"), '\\', anychar),
+      // take_until("*/"), // todo: Use escaped here.
       tag("*/")
     )),
   )(i)
