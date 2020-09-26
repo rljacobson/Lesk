@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
+use super::{ToDiagnostic, SourceID};
 use crate::parser::{ToSpan, LSpan};
 
 /// Error that occurs when an incorrect closing delimiter was specified.
@@ -44,7 +44,7 @@ impl Display for InvalidLabelError {
 impl Error for InvalidLabelError {}
 
 impl ToDiagnostic for InvalidLabelError {
-  fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+  fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
     let primary =
         Label::primary(file, self.label.1).with_message("invalid code block label");
     let mut diagnostic =

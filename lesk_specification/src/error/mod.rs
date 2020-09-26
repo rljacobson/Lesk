@@ -30,7 +30,7 @@ pub use self::unexpected_section_end::UnexpectedSectionEndError;
 pub use self::missing::MissingError;
 
 use crate::parser::ToSpan;
-use super::FileId;
+use super::SourceID;
 
 
 // todo: refactor error framework to be more extensible.
@@ -49,7 +49,7 @@ use super::FileId;
 /// struct MyError;
 ///
 /// impl ToDiagnostic for MyError {
-///     fn to_diagnostic(&self, file: FileId) -> Diagnostic {
+///     fn to_diagnostic(&self, file: SourceID) -> Diagnostic {
 ///         let label = Label::new(file, Span::new(2, 3), "error occurred here");
 ///         Diagnostic::new_error("something went wrong", label)
 ///     }
@@ -65,7 +65,7 @@ pub trait ToDiagnostic {
     /// Converts this type to a [`Diagnostic`] using the given file ID.
     ///
     /// [`Diagnostic`]: https://docs.rs/codespan-reporting/0.5.0/codespan_reporting/diagnostic/struct.Diagnostic.html
-    fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId>;
+    fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID>;
 }
 
 /// A growable stack for accumulating errors.
@@ -220,7 +220,7 @@ impl Errors {
     ///
     /// ```
     /// # use error::{Errors, ExpectedFoundError};
-    /// use codespan::{Files, FileId, Span};
+    /// use codespan::{Files, SourceID, Span};
     ///
     /// let mut files = Files::new();
     /// let file_id = files.add("example.nix", "1 + 1");
@@ -231,7 +231,7 @@ impl Errors {
     /// let diagnostics = errors.to_diagnostics(file_id);
     /// println!("{:?}", diagnostics);
     /// ```
-    pub fn to_diagnostics(&self, file: FileId) -> Vec<Diagnostic<FileId>> {
+    pub fn to_diagnostics(&self, file: SourceID) -> Vec<Diagnostic<SourceID>> {
         self.errors.iter().map(|e| e.to_diagnostic(file)).collect()
     }
 }
@@ -423,7 +423,7 @@ impl From<UnexpectedSectionEndError> for Error {
 }
 
 impl ToDiagnostic for Error {
-    fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+    fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
         match *self {
             Error::ExpectedFound(ref e) => e.to_diagnostic(file),
             Error::IncorrectDelim(ref e) => e.to_diagnostic(file),

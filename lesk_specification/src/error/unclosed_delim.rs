@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
+use super::{ToDiagnostic, SourceID};
 use crate::parser::ToSpan;
 
 /// Error that occurs when at least one delimited span was left unclosed.
@@ -40,7 +40,7 @@ impl Display for UnclosedDelimError {
 impl Error for UnclosedDelimError {}
 
 impl ToDiagnostic for UnclosedDelimError {
-    fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+    fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
         let primary =
             Label::primary(file, self.eof_span).with_message("expected matching delimiter here");
         let mut diagnostic =

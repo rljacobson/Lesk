@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
+use super::{ToDiagnostic, SourceID};
 use crate::parser::ToSpan;
 
 /// Error that occurs when `%%` is encountered inside a code block.
@@ -40,7 +40,7 @@ impl Display for UnexpectedSectionEndError {
 impl Error for UnexpectedSectionEndError {}
 
 impl ToDiagnostic for UnexpectedSectionEndError {
-  fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+  fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
 
 
     let primary =

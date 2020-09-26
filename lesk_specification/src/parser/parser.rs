@@ -1,11 +1,10 @@
 #![allow(dead_code, unused_imports)]
 
-//use codespan::Span as Code;
-
-
 use std::io::Read;
+use std::fs::File;
+use std::collections::HashMap;
 
-//region Use Nom
+// region Use Nom
 use nom::{
   character::complete::{anychar, line_ending, multispace0, crlf, space0},
   AsChar,
@@ -75,14 +74,30 @@ use nom::{
   InputTakeAtPosition,
   combinator::{flat_map, peek},
   multi::many_till,
-  character::complete::{alpha1, space1}
+  character::complete::{alpha1, space1},
+  multi::fold_many0
 };
-use nom_locate::LocatedSpan;
 // endregion
 
 use smallvec::SmallVec;
 
+use whitespace::{
+  skip0,
+  skip1,
+  skip_no_nl0,
+  skip_no_nl1
+};
+use source::*;
+use super::*;
 use crate::{
+  error::Error::{
+    Unexpected,
+    Missing
+  },
+  options::{
+    OptionKind,
+    OPTIONS
+  },
   error::{
     Error,
     Errors,
@@ -94,25 +109,29 @@ use crate::{
     UnexpectedSectionEndError,
   },
   section_items::*,
-  mergable::{Merged, Mergable},
-  error::Error::{ExpectedFound, IncorrectDelim, InvalidLabel, UnexpectedSectionEnd, UnclosedDelim}
+  mergable::{
+    Merged,
+    Mergable,
+    merge_or_append_items,
+    merge_or_push_item,
+  },
+  error::Error::{
+    ExpectedFound,
+    IncorrectDelim,
+    InvalidLabel,
+    UnexpectedSectionEnd,
+    UnclosedDelim
+  },
+  error::MissingError
 };
-use whitespace::{skip0, skip1, skip_no_nl0, skip_no_nl1};
-use source::*;
-use super::*;
-use crate::options::{OptionKind, OPTIONS};
-use crate::error::Error::{Unexpected, Missing};
-use crate::error::MissingError;
-use std::fs::File;
-use nom::multi::fold_many0;
 
 // todo: make typedef for Errors
 
 // trait Parser<'a>: NomParser<InputType<'a>, InputType<'a>, Errors> {}
 
 pub type Result<'a> = NomResult<InputType<'a>, InputType<'a>, Errors>;
-pub type PResult<'a> = NomResult<InputType<'a>, Span, Errors>;
-pub type IResult<'a> = NomResult<InputType<'a>, SectionItem, Errors>;
+pub type PResult<'a> = NomResult<InputType<'a>, Span<'a>, Errors>;
+pub type IResult<'a> = NomResult<InputType<'a>, Item, Errors>;
 pub type SResult<'a> = NomResult<InputType<'a>, SectionItemSet, Errors>;
 
 // region Section One
@@ -131,12 +150,13 @@ pub fn section_one(i: InputType) -> SResult {
         parse_state,
         parse_definition,
 
-        // Separating the next two ensures that `parse_code_block` has an opportunity to see the
-        // whitespace introducing indented code.
-        value(SectionItemSet::default(), skip_no_nl1),
-        value(SectionItemSet::default(), line_ending)
+        // Separating the skip_no_nl1 and newline ensures that `parse_code_block` has an
+        // opportunity to see the whitespace introducing indented code.
+        terminated(value(SectionItemSet::default(), skip_no_nl1), line_ending)
       )),
+
       SectionItemSet::default(),
+
       |mut acc, mut next| {
         acc.extend(&mut next.drain(..));
         acc
@@ -161,9 +181,9 @@ fn parse_definition(i: InputType) -> SResult {
   ))(i)?;
 
   let result = SmallVec::from_elem(
-      SectionItem::Definition {
-        name: name.to_span(),
-        code: regex.to_span()
+    Item::Definition {
+        name: name.into(),
+        code: regex.into()
       },
     1);
 
@@ -187,11 +207,11 @@ fn parse_state(i: InputType) -> SResult {
   )(i)?;
 
   let result = SmallVec::from_elem(
-    SectionItem::State {
+    Item::State {
       is_exclusive: exclusive,
-      name: name.to_span()
+      name: name.into()
     }
-  , 1);
+    , 1);
 
   Ok((rest, result))
 
@@ -218,7 +238,7 @@ fn parse_option(i: InputType) -> SResult {
   ),
     | mut options | {
       options.drain_filter(| x | x.is_some())
-             .map(| x | SectionItem::Option(x.unwrap()))
+             .map(| x | Item::Option(x.unwrap()))
              .collect()
     }
   )(input)
@@ -362,7 +382,7 @@ fn parse_code_type(item_type: ItemType) -> impl Fn(InputType) -> PResult {
                 .and_then(|(rest, inner_span)| {
                   // Put the delim_span back on the inner_span if item_type is ItemType::Unknown.
                   if item_type == ItemType::Unknown {
-                    Ok((rest, delim_span.to_span().merge(inner_span)))
+                    Ok((rest, delim_span.into().merge(inner_span)))
                   } else {
                     Ok((rest, inner_span))
                   }
@@ -393,7 +413,7 @@ fn parse_code_block(i: InputType) -> SResult {
         recognize(preceded(is_a("\t "), pair(not_line_ending, line_ending))),
         SectionItemSet::default(),
         |mut acc, mut next: InputType| {
-          merge_or_push_item(&mut acc, SectionItem::User(next.to_span()));
+          merge_or_push_item(&mut acc, Item::User(next.into()));
           acc
         }
       ),
@@ -402,7 +422,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Top),
         |span| {
-          SmallVec::from_elem(SectionItem::Top(span), 1)
+          SmallVec::from_elem(Item::Top(span), 1)
         },
       ),
 
@@ -410,7 +430,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Class),
         |span| {
-          SmallVec::from_elem(SectionItem::Class(span), 1)
+          SmallVec::from_elem(Item::Class(span), 1)
         },
       ),
 
@@ -418,7 +438,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Init),
         |span| {
-          SmallVec::from_elem(SectionItem::Init(span), 1)
+          SmallVec::from_elem(Item::Init(span), 1)
         },
       ),
 
@@ -426,7 +446,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::User),
         |span| {
-          SmallVec::from_elem(SectionItem::User(span), 1)
+          SmallVec::from_elem(Item::User(span), 1)
         },
       ),
 
@@ -434,7 +454,7 @@ fn parse_code_block(i: InputType) -> SResult {
       map(
         parse_code_type(ItemType::Unknown),
         |span| {
-          SmallVec::from_elem(SectionItem::Unknown(span), 1)
+          SmallVec::from_elem(Item::Unknown(span), 1)
         },
       ),
 
@@ -465,13 +485,16 @@ fn parse_code_block(i: InputType) -> SResult {
 /**
 Recursively parses blocks of code assuming the opening brace has already been consumed. The code
 is accumulated in the `user_code` and/or `unknown` fields of a `ParsedCode` struct. The client
-code must recategorize the `unknown` code according to which labeled block this functon was
+code must recategorize the `unknown` code according to which labeled block this function was
 called to parse.
+
+Note that this intelligently parses nested `%{...%}` and `%keyword{...}` blocks. In the second
+case, inner code is assigned the same code type as the outermost block.
 */
 // todo: Continue parsing after errors.
 // todo: Do we have a use for `brace_level` or `block_level`
 pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'a> {
-  map_res::<_, _, _, _, Errors, _, _>(
+  map::<_, _, _, Errors, _, _>(
     many_till(
 
       // region Many Section
@@ -484,26 +507,26 @@ pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'
         // A string: "This, }, is a closing brace but does not close a block."
         map(parse_string, |l_span| {
           report(l_span, item_type);
-          l_span.to_span()
+          l_span.into()
         }),
 
         // A character: '}'
         map(parse_character, |l_span| {
           report(l_span, item_type);
-          l_span.to_span()
+          l_span.into()
         }),
 
         // Whitespace and comments
         map(recognize(skip1), |l_span| {
           report(l_span, item_type);
-          l_span.to_span()
+          l_span.into()
         }),
 
         // Match "safe" characters. This is an optimization so we don't parse a single character at
         // a time with the next parser below.
         map(is_not(r#"/\"'%{}"#), |l_span: InputType| {
           report(l_span, item_type);
-          l_span.to_span()
+          l_span.into()
         }),
 
         // Any character not matched above. We use more or less the code for anychar but in a way
@@ -527,7 +550,7 @@ pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'
                 report(input, item_type);
                 Ok((
                   input.slice(input.input_len()..),
-                  input.to_span()
+                  input.into()
                 ))
               }
             },
@@ -573,7 +596,7 @@ pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'
         ),
 
         // section separator.
-        // todo: This is an error in `nested_code`, but not in `section_1`
+        // todo: This is an error in `nested_code`, but not in the section top-level
         map_res::<_, _, _, _, Errors, _, _>(
           peek(tag("%%")),
           |input: InputType| {
@@ -590,35 +613,17 @@ pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'
         //     )))
         //   }
         // ),
+
       )) // end alt
       // endregion
     ), // end many_till
 
     |(mut code, (rest, mut close_delim_item))| {
-      // Consolidate parsed value
-      if code.is_empty() {
-        return Ok(close_delim_item.to_span());
-      }
-
-      let mut code_span = code.first().unwrap().to_span();
-
-      code_span = code[1..].iter_mut().fold(
-        code_span,
-        |mut acc: Span, mut next| {
-          match acc.merged(&mut next.to_span()) {
-            Merged::Yes(s) => { /* pass */ }
-            Merged::No(s, _) => {
-              println!("Non contiguous {}: {} <--> {}", item_type, acc, next.to_span());
-            }
-          };
-          acc
-        }
-      );
-      code_span.merged(&mut close_delim_item.to_span());
-      Ok(code_span)
+      consolidate_code(code, close_delim_item)
     }
   )(i)
 }
+
 
 
 /**
@@ -672,6 +677,81 @@ fn parse_include(i: InputType) -> SResult {
 }
 
 // endregion
+
+// region Section Two
+
+pub fn section_two(i: InputType) -> SResult {
+
+  let mut items = SectionItemSet::default();
+
+  // region Scanner Top Code
+
+  // Section Two starts with an optional code section for code local to the scanner routine. The
+  // code is either surrounded by `%{ ... %}` or is indented. We store such code in
+  // `Item::ScannerTop`.
+  let (rest, mut scanner_top_code) =
+    fold_many0(
+      alt((
+
+        // Indented Scanner Top Code
+        fold_many1(
+          recognize(preceded(is_a("\t "), pair(not_line_ending, line_ending))),
+          SectionItemSet::default(),
+          |mut acc, mut next: InputType| {
+            merge_or_push_item(&mut acc, Item::ScannerTop(next.into()));
+            acc
+          }
+        ),
+
+        // Scanner Top Code within `{ }`
+        map(
+          parse_code_type(ItemType::ScannerTop),
+          |span| {
+            SmallVec::from_elem(Item::ScannerTop(span), 1)
+          },
+        ),
+
+        // Scanner Top Code within `%{ ... %}`
+
+
+
+
+
+        // Note that comments MUST be indented, as otherwise they are interpreted as regexes.
+
+      )),
+
+      SectionItemSet::default(),
+
+      | mut acc, mut next | {
+        acc.extend(next.drain(..));
+        acc
+      }
+  )(i)?;
+
+  // Since non-scanner_top_code comments from above are empty, this vector might be empty.
+  if !scanner_top_code.is_empty(){
+    if let Some(span) = scanner_top_code {
+      items.push(Item::scanner_top_code(span));
+    }
+  }
+
+  // endregion
+
+  // Recursively parse modes (start conditions).
+  let modes = Modes::default();
+
+  // Start Conditions:
+  //    <start1,start2,...>
+  //    < -start1,-start2,...>
+
+  SResult
+
+}
+
+
+// endregion
+
 
 // region Generic Parsers
 
@@ -796,6 +876,33 @@ fn parse_quoted(i: InputType) -> Result {
 // endregion
 
 
+
+fn consolidate_code(mut code: Vec<Span>, item_type: InputType) -> Span {
+  // Consolidate parsed value
+  if code.is_empty() {
+    return close_delim_item.to_span();
+  }
+
+  let mut first_span = code.first().unwrap().into();
+
+  let code_span = code[1..].iter_mut().fold(
+    first_span,
+    |mut acc: Span, mut next| {
+      match acc.merged(&mut next.to_span()) {
+        Merged::Yes(s) => { /* pass */ }
+        Merged::No(s, _) => {
+          println!("Non contiguous {}: {} <--> {}", item_type, acc, next.to_span());
+        }
+      };
+      acc
+    }
+  );
+  code_span.merged(&mut close_delim_item.to_span());
+  code_span
+}
+
+
+
 #[allow(unused_variables)]
 fn report(l_span: InputType, item_type: ItemType) {
   // println!(">>>> {}: {} at line {}, col {}, {}",
@@ -803,6 +910,6 @@ fn report(l_span: InputType, item_type: ItemType) {
   //          l_span.fragment(),
   //          l_span.location_line(),
   //          l_span.get_column(),
-  //          l_span.to_span()
+  //          l_span.into()
   // );
 }

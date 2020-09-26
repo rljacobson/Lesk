@@ -7,11 +7,8 @@ A trait for structs that can determine if they can be merged with each other.
 
 
 
-use codespan::Span;
 use std::cmp::{min, max};
-use nom_locate::LocatedSpan;
 use std::fmt::{Display, Debug};
-use nom::Offset;
 use smallvec::SmallVec;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]

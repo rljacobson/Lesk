@@ -1,12 +1,11 @@
-use codespan::Files;
-
 pub mod parser;
-pub mod source;
+mod source;
 mod whitespace;
-mod span;
 
-pub use span::*;
+pub use source::*;
 pub use super::options::{OptionSet, OptionField};
+
+pub use saucepan::Span;
 
 
 pub type InputType<'a> = LSpan<'a>;

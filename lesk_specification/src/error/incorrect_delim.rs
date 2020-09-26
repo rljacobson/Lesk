@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
+use super::{ToDiagnostic, SourceID};
 use crate::parser::ToSpan;
 
 /// Error that occurs when an incorrect closing delimiter was specified.
@@ -47,7 +47,7 @@ impl Display for IncorrectDelimError {
 impl Error for IncorrectDelimError {}
 
 impl ToDiagnostic for IncorrectDelimError {
-  fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+  fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
     let primary =
         Label::primary(file, self.unmatched_delim.1).with_message("incorrect close delimiter");
     let mut diagnostic = Diagnostic::error().with_message(self.to_string())

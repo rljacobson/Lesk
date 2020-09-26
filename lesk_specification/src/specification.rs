@@ -9,40 +9,58 @@ use codespan_reporting::term::{emit, termcolor, Config};
 use nom::Err as NomErr;
 
 use super::*;
-use parser::parser::section_one as parse_section_one;
-use crate::section_items::SectionItem;
+use parser::{
+  parser::section_one as parse_section_one,
+  parser::section_two as parse_section_two
+};
+use crate::section_items::{Item, SectionItemSet};
 use crate::error::Errors;
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+use crate::parser::{LSpan, InputType};
+use crate::parser::parser::SResult;
 
 
 static DEFAULT_OUTPUT_PATH: &str = "lex.yy.cpp";
 
 
 pub struct Specification<'s> {
-  pub options : Options, //< maps option name (from the options_table) to its option value
-  color_term  : bool,    //< terminal supports colors
+  pub options: Options,
+  //< maps option name (from the options_table) to its option value
+  color_term: bool,    //< terminal supports colors
 
-  writer       : Box<dyn FnMut(&str)>, //< output stream
-  source_files: SourceFiles<String, String>,       //< Source code database
+  writer: Box<dyn FnMut(&str)>,
+  //< output stream
+  source_files: SourceFiles<String, String>,
+  //< Source code database
   // source       : String,               //< source text
-  source_id    : usize,
+  source_id: usize,
 
-  conditions  : StrVec<'s>, //< "INITIAL" start condition etc. defined with %x name
-  definitions : StrMap<'s>, //< map of {name} to regex
-  inclusive   : Starts,     //< inclusive start conditions
+  conditions: StrVec<'s>,
+  //< "INITIAL" start condition etc. defined with %x name
+  definitions: StrMap<'s>,
+  //< map of {name} to regex
+  inclusive: Starts,     //< inclusive start conditions
 
   //library      : Library,      //< the regex library selected
-  line           : &'s str,      //< current line read from input
-  lineno         : usize,        //< current line number at input
-  patterns       : StrVec<'s>,   //< regex patterns for each start condition
-  rules          : RulesMap, //< <Start_i>regex_j action for Start i Rule j
-  section_1      : Code,        //< %{ user code %} in section 1 container
-  section_2      : CodeMap,     //< lexer user code in section 2 container
-  section_3      : Code,        //< main user code in section 3 container
-  section_init   : Code,        //< %init{ init code %} in section 1 container
-  section_struct : Code,        //< %class{ class code %} in section 1 container
-  section_top    : Code,        //< %top{ user code %} in section 1 container
-
+  line: &'s str,
+  //< current line read from input
+  lineno: usize,
+  //< current line number at input
+  patterns: StrVec<'s>,
+  //< regex patterns for each start condition
+  rules: RulesMap,
+  //< <Start_i>regex_j action for Start i Rule j
+  section_1: Code,
+  //< %{ user code %} in section 1 container
+  section_2: CodeMap,
+  //< lexer user code in section 2 container
+  section_3: Code,
+  //< main user code in section 3 container
+  section_init: Code,
+  //< %init{ init code %} in section 1 container
+  section_struct: Code,
+  //< %class{ class code %} in section 1 container
+  section_top: Code,        //< %top{ user code %} in section 1 container
 }
 
 impl<'s> Default for Specification<'s> {
@@ -54,91 +72,89 @@ impl<'s> Default for Specification<'s> {
 
 
     let mut new_spec = Self {
-      options        : Options::from_args(), // Parses command line arguments
-      color_term     : true,
+      options: Options::from_args(), // Parses command line arguments
+      color_term: true,
       // todo        : writer to be replaced with Akama
-      writer         : Box::new(|_|{}),       // a dummy initial value
+      writer: Box::new(|_| {}),       // a dummy initial value
       source_files: SourceFiles::new(),
       // source         : String::default(),
       // in_file        : String::default(),
-      source_id      : 43usize,       // Arbitrary initial value will be overwritten
-      conditions     : StrVec::default(),
-      definitions    : StrMap::default(),
-      inclusive      : Starts::default(),
+      source_id: 43usize,       // Arbitrary initial value will be overwritten
+      conditions: StrVec::default(),
+      definitions: StrMap::default(),
+      inclusive: Starts::default(),
       //library      : Library::default(),
-      line           : &"",
-      lineno         : 0,
-      patterns       : StrVec::default(),
-      rules          : RulesMap::default(),
-      section_1      : Code::default(),
-      section_2      : CodeMap::default(),
-      section_3      : Code::default(),
-      section_init   : Code::default(),
-      section_struct : Code::default(),
-      section_top    : Code::default(),
+      line: &"",
+      lineno: 0,
+      patterns: StrVec::default(),
+      rules: RulesMap::default(),
+      section_1: Code::default(),
+      section_2: CodeMap::default(),
+      section_3: Code::default(),
+      section_init: Code::default(),
+      section_struct: Code::default(),
+      section_top: Code::default(),
 
     };
-
 
 
     // Establish the output stream
 
     new_spec.writer = // the value of the if statement
-    if let Some(path) = &new_spec.options.out_file {
-      let f = File::create(&path)
-                .expect(format!("Unable to create file: {}", &path).as_str());
-      let mut buf_writer = BufWriter::new(f);
+        if let Some(path) = &new_spec.options.out_file {
+          let f = File::create(&path)
+              .expect(format!("Unable to create file: {}", &path).as_str());
+          let mut buf_writer = BufWriter::new(f);
 
-      // Write to both file and stdout.
-      if new_spec.options.stdout {
-        let mut std_out = BufWriter::new(std::io::stdout());
+          // Write to both file and stdout.
+          if new_spec.options.stdout {
+            let mut std_out = BufWriter::new(std::io::stdout());
 
-        Box::new(
-          move |buf: &str| {
-            let _ = std_out.write_all(buf.as_bytes());
-            let _ = buf_writer.write_all(buf.as_bytes());
+            Box::new(
+              move |buf: &str| {
+                let _ = std_out.write_all(buf.as_bytes());
+                let _ = buf_writer.write_all(buf.as_bytes());
+              }
+            )
           }
-        )
-      }
-      // Only write to file
-      else {
-        Box::new(
-          move |buf: &str| {
-            let _ = buf_writer.write_all(buf.as_bytes());
+          // Only write to file
+          else {
+            Box::new(
+              move |buf: &str| {
+                let _ = buf_writer.write_all(buf.as_bytes());
+              }
+            )
           }
-        )
-      }
-    }
-    // No filename supplied
-    else {
-      // Only write to STDOUT
-      if new_spec.options.stdout {
-        let mut std_out = BufWriter::new(std::io::stdout());
+        }
+        // No filename supplied
+        else {
+          // Only write to STDOUT
+          if new_spec.options.stdout {
+            let mut std_out = BufWriter::new(std::io::stdout());
 
-        Box::new(
-          move |buf: &str| {
-            let _ = std_out.write(buf.as_bytes());
+            Box::new(
+              move |buf: &str| {
+                let _ = std_out.write(buf.as_bytes());
+              }
+            )
           }
-        )
-      }
-      // Only write to default output file `lex.yy.rs`
-      else {
-        let f = File::create(DEFAULT_OUTPUT_PATH)
-        .expect(format!("Unable to create file: {}", DEFAULT_OUTPUT_PATH).as_str());
-        let mut buf_writer = BufWriter::new(f);
+          // Only write to default output file `lex.yy.rs`
+          else {
+            let f = File::create(DEFAULT_OUTPUT_PATH)
+                .expect(format!("Unable to create file: {}", DEFAULT_OUTPUT_PATH).as_str());
+            let mut buf_writer = BufWriter::new(f);
 
-        Box::new(
-          move |buf: &str| {
-            let _ = buf_writer.write_all(buf.as_bytes());
+            Box::new(
+              move |buf: &str| {
+                let _ = buf_writer.write_all(buf.as_bytes());
+              }
+            )
           }
-        )
-      }
-    };
+        };
 
     new_spec.init_source_file();
 
     new_spec
-
   }
 }
 
@@ -147,7 +163,7 @@ impl<'s> Specification<'s> {
     Self::default()
   }
 
-  pub fn set_in_file(&mut self, path: String){
+  pub fn set_in_file(&mut self, path: String) {
     self.options.in_file = path;
     self.init_source_file();
   }
@@ -169,7 +185,7 @@ impl<'s> Specification<'s> {
     else {
       // Both `new_source` and `new_file` will be consumed.
       let mut new_source = String::default();
-      let mut in_file    = String::default();
+      let mut in_file = String::default();
 
       std::mem::swap(&mut self.options.in_file, &mut in_file);
       std::fs::File::open(&in_file)
@@ -187,8 +203,7 @@ impl<'s> Specification<'s> {
   }
 
   pub fn parse(&mut self) {
-
-    if self.source_files.is_empty(){
+    if self.source_files.is_empty() {
       eprintln!("Empty source file.");
       return;
     }
@@ -199,56 +214,63 @@ impl<'s> Specification<'s> {
 
     // If there were a choice of libraries...
     //set_library();
-    self.parse_section_1();
+
+    let sections = [parse_section_one, parse_section_two].iter();
+    let mut rest = InputType::new(self.source_files.get(self.source_id).unwrap().source().as_str());
+    let mut items: SectionItemSet;
+
+    for parser in sections {
+      let mut result = parser(rest);
+
+      if result.is_err() {
+        self.handle_parse_errors(&result);
+        return;
+      }
+      // Unwrap is safe because of preceding `if`.
+      let (new_rest, new_items) = result.unwrap();
+      rest = new_rest;
+      items = new_items;
+
+      println!("Parsed {} items.", items.len());
+      for item in items {
+        println!("{}", item);
+      }
+    }
   }
 
-
-  pub fn parse_section_1(&mut self) {
-
-    let result = parse_section_one(
-      LocatedSpan::new(self.source_files.get(self.source_id).unwrap().source().as_str())
-    );
-
+  fn handle_parse_errors(&self, result: &SResult) {
     match result {
-      Ok((_rest, section_items)) => {
-
-        println!("Parsed {} items.", section_items.len());
-        for item in section_items {
-          println!("{}", item);
-        }
-
-        // todo: Act on the results.
-
-      },
-
       Err(NomErr::Error(e)) => {
         let mut writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();
 
-        for d in e.to_diagnostics(self.source_id){
+        for d in e.to_diagnostics(self.source_id) {
           emit(&mut writer, &config, &self.source_files, &d);
         }
-      },
+
+        return;
+      }
 
       Err(NomErr::Failure(e)) => {
         let mut writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();
 
-        for d in e.to_diagnostics(self.source_id){
+        for d in e.to_diagnostics(self.source_id) {
           emit(&mut writer, &config, &self.source_files, &d);
-
         }
+
+        return;
       }
 
       Err(NomErr::Incomplete(_)) => {
         panic!("Got a nom incomplete error.");
       }
 
+      _ => {
+        unreachable!();
+      }
     }
-
-
   }
-
 
 
   /*

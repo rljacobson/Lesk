@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
+use super::{ToDiagnostic, SourceID};
 use crate::parser::ToSpan;
 
 /// Error that occurs when an unexpected token was found
@@ -48,7 +48,7 @@ impl Display for MissingError {
 impl Error for MissingError {}
 
 impl ToDiagnostic for MissingError {
-  fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+  fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
     let mut labels =
         vec![Label::primary(file, self.span).with_message("missing here")];
 

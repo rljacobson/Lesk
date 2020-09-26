@@ -17,6 +17,7 @@ use smallvec::SmallVec;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum ItemType {
+  // SectionOne
   User,
   Top,
   Class,
@@ -26,12 +27,17 @@ pub enum ItemType {
   State,
   Definition,
   Option,
+
+  // Section Two
+  ScannerTop,
+  // Start,    //< Start States
 }
 
 impl Display for ItemType{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     let name =
         match self {
+          // Section One
           ItemType::Top => "ItemType::Top",
           ItemType::Class => "ItemType::Class",
           ItemType::Init => "ItemType::Init",
@@ -40,7 +46,10 @@ impl Display for ItemType{
           ItemType::Include => "ItemType::Include",
           ItemType::Option => "ItemType::Option",
           ItemType::State => "ItemType::State",
-          ItemType::Definition => {"ItemType::Definition"}
+          ItemType::Definition => "ItemType::Definition",
+
+          // Section Two
+          ItemType::ScannerTop => "ItemType::ScannerTop",
         };
 
     write!(f, "{}", name)
@@ -48,15 +57,16 @@ impl Display for ItemType{
 }
 
 impl ItemType {
-  pub fn new<S>(&self, item: S) -> SectionItem
+  pub fn new<S>(&self, item: S) -> Item
       where S: ToSpan
   {
     match self {
-      ItemType::Top => SectionItem::top_code(item.to_span()),
-      ItemType::Class => SectionItem::class_code(item.to_span()),
-      ItemType::Init => SectionItem::init_code(item.to_span()),
-      ItemType::User => SectionItem::user_code(item.to_span()),
-      ItemType::Unknown => SectionItem::unknown_code(item.to_span()),
+      ItemType::Top => Item::top_code(item.to_span()),
+      ItemType::Class => Item::class_code(item.to_span()),
+      ItemType::Init => Item::init_code(item.to_span()),
+      ItemType::User => Item::user_code(item.to_span()),
+      ItemType::Unknown => Item::unknown_code(item.to_span()),
+      ItemType::ScannerTop => Item::scanner_top(item.to_span()),
 
       _ => {
         unreachable!("Cannot use ItemType::new to create an Options, Include, State, or Definition\
@@ -68,28 +78,15 @@ impl ItemType {
     }
   }
 
-  pub fn from_span(&self, code: Span) -> SectionItem {
-    match self {
-      ItemType::Top => SectionItem::User(code),
-      ItemType::Class => SectionItem::Top(code),
-      ItemType::Init => SectionItem::Class(code),
-      ItemType::User => SectionItem::Init(code),
-      ItemType::Unknown => SectionItem::Unknown(code),
-
-      _ => {
-        unreachable!("Cannot use ItemType::from_code to create an Options, Include, State, or \
-        Definition.");
-      }
-
-    }
-  }
-
   pub fn open_delimiter(&self) -> &'static str {
     match self {
       ItemType::Top => "%top{",
       ItemType::Class => "%class{",
       ItemType::Init => "%init{",
-      ItemType::User => "%{",
+
+      | ItemType::ScannerTop
+      | ItemType::User => "%{",
+
       ItemType::Unknown => "{",
       ItemType::Include => "%include",
       ItemType::Option => "%options",
@@ -111,6 +108,7 @@ impl ItemType {
       | ItemType::Class
       | ItemType::Init
       | ItemType::User
+      | ItemType::ScannerTop
       | ItemType::Unknown => true,
 
       | ItemType::Include
@@ -128,7 +126,8 @@ impl ItemType {
       | ItemType::Init
       | ItemType::Unknown => "}",
 
-      ItemType::User => "%}",
+      | ItemType::ScannerTop
+      | ItemType::User => "%}",
 
       | ItemType::Include
       | ItemType::Option
@@ -138,109 +137,118 @@ impl ItemType {
   }
 }
 
-pub type SectionItemSet = SmallVec<[SectionItem;1]>;
+pub type SectionItemSet<'s> = SmallVec<[Item<'s>;1]>;
 
 #[derive(Clone, Debug)]
-pub enum SectionItem {
-  User(Span),
-  Top(Span),
-  Class(Span),
-  Init(Span),
-  Unknown(Span),
+pub enum Item<'s> {
+  // Section One
+  User(Span<'s>),
+  Top(Span<'s>),
+  Class(Span<'s>),
+  Init(Span<'s>),
+  Unknown(Span<'s>),
   Option(OptionField),
   Include {
     file: SourceFile<String, String>,
-    contents: Vec<SectionItem>,
+    contents: Vec<Item<'s>>,
   },
   State {
     is_exclusive: bool,
-    name: Span,
+    name: Span<'s>,
   },
   Definition {
-    name: Span,
-    code: Span,
+    name: Span<'s>,
+    code: Span<'s>,
   },
+
+  // Section Two
+  ScannerTop(Span<'s>),
 }
 
-impl Display for SectionItem {
+impl Display for Item {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     let text =
         match self {
-          SectionItem::User(code) => {
-            format!("User({:?})", code)
-          }
-          SectionItem::Top(code) => {
-            format!("Top({:?})", code)
-          }
-          SectionItem::Class(code) => {
-            format!("Class({:?})", code)
-          }
-          SectionItem::Init(code) => {
-            format!("Init({:?})", code)
-          }
-          SectionItem::Unknown(code) => {
-            format!("Unknown({:?})", code)
-          }
-          SectionItem::Include {
+          // Section One
+          Item::User(code)    => format!("User({:?})",    code),
+          Item::Top(code)     => format!("Top({:?})",     code),
+          Item::Class(code)   => format!("Class({:?})",   code),
+          Item::Init(code)    => format!("Init({:?})",    code),
+          Item::Unknown(code) => format!("Unknown({:?})", code),
+
+
+          Item::Include {
             file,
             contents,
           } => {
             format!("Include{{ file={:?} }}", file.name())
           }
-          SectionItem::State {
+          Item::State {
             is_exclusive,
             name: code
           } => {
             format!("State{{is_exlusive: {:?}, code={:?} }}", is_exclusive, code)
           }
-          SectionItem::Definition {
+          Item::Definition {
             name,
             code,
           } => {
             format!("Definition{{name: {:?}, regex={:?} }}", name, code)
           }
-          SectionItem::Option(option) => {
+          Item::Option(option) => {
             format!("Options: {:?}", *option)
           }
+
+          // Section Two
+          Item::ScannerTop(code) => format!("ScannerTop({:?})", code),
+
         };
 
     write!(f, "{}", text)
   }
 }
 
-impl SectionItem {
+impl Item {
   pub fn user_code<S: ToSpan>(span: S) -> Self {
-    SectionItem::User(span.to_span())
+    Item::User(span.to_span())
   }
 
   pub fn top_code<S: ToSpan>(span: S) -> Self {
-    SectionItem::Top(span.to_span())
+    Item::Top(span.to_span())
   }
 
   pub fn class_code<S: ToSpan>(span: S) -> Self {
-    SectionItem::Class(span.to_span())
+    Item::Class(span.to_span())
   }
 
   pub fn init_code<S: ToSpan>(span: S) -> Self {
-    SectionItem::Init(span.to_span())
+    Item::Init(span.to_span())
   }
 
   pub fn unknown_code<S: ToSpan>(span: S) -> Self {
-    SectionItem::Unknown(span.to_span())
+    Item::Unknown(span.to_span())
+  }
+
+  pub fn scanner_top_code<S: ToSpan>(span: S) -> Self {
+    Item::ScannerTop(span.to_span())
   }
 
   // Supplies the `ItemType` variant associated to this `SectionItem`.
   pub fn item_type(&self) -> ItemType {
     match self {
-      SectionItem::Top(_) => ItemType::Top,
-      SectionItem::Class(_) => ItemType::Class,
-      SectionItem::Init(_) => ItemType::Init,
-      SectionItem::User(_) => ItemType::User,
-      SectionItem::Unknown(_) => ItemType::Unknown,
-      SectionItem::Include { .. } => ItemType::Include,
-      SectionItem::Option(_) => ItemType::Option,
-      SectionItem::State { .. } => ItemType::State,
-      SectionItem::Definition { .. } => ItemType::Definition,
+      // Section One
+      Item::Top(_)            => ItemType::Top,
+      Item::Class(_)          => ItemType::Class,
+      Item::Init(_)           => ItemType::Init,
+      Item::User(_)           => ItemType::User,
+      Item::Unknown(_)        => ItemType::Unknown,
+      Item::Include { .. }    => ItemType::Include,
+      Item::Option(_)         => ItemType::Option,
+      Item::State { .. }      => ItemType::State,
+      Item::Definition { .. } => ItemType::Definition,
+
+      // Section Two
+      Item::ScannerTop(_) => ItemType::ScannerTop,
     }
   }
 
@@ -259,16 +267,17 @@ impl SectionItem {
 
   pub fn get_code(&mut self) -> Option<&mut Span> {
     match self {
-      | SectionItem::User(code)
-      | SectionItem::Top(code)
-      | SectionItem::Class(code)
-      | SectionItem::Init(code)
-      | SectionItem::State { name: code, .. }
-      | SectionItem::Unknown(code) => Some(code),
+      | Item::User(code)
+      | Item::Top(code)
+      | Item::Class(code)
+      | Item::Init(code)
+      | Item::State { name: code, .. }
+      | Item::ScannerTop(code)
+      | Item::Unknown(code) => Some(code),
 
-      | SectionItem::Include { .. }
-      | SectionItem::Definition { .. }
-      | SectionItem::Option(_) => {
+      | Item::Include { .. }
+      | Item::Definition { .. }
+      | Item::Option(_) => {
         None
       }
     }
@@ -276,19 +285,20 @@ impl SectionItem {
 }
 
 
-impl ToSpan for SectionItem {
+impl ToSpan for Item {
   fn to_span(&self) -> Span {
     match self {
-      | SectionItem::User(code)
-      | SectionItem::Top(code)
-      | SectionItem::Class(code)
-      | SectionItem::Init(code)
-      | SectionItem::State { name: code, .. }
-      | SectionItem::Unknown(code) => *code,
+      | Item::User(code)
+      | Item::Top(code)
+      | Item::Class(code)
+      | Item::Init(code)
+      | Item::State { name: code, .. }
+      | Item::ScannerTop(code)
+      | Item::Unknown(code) => *code,
 
-      | SectionItem::Include { .. }
-      | SectionItem::Definition { .. }
-      | SectionItem::Option(_) => {
+      | Item::Include { .. }
+      | Item::Definition { .. }
+      | Item::Option(_) => {
         panic!("Tried to turn {} into code.", self);
       }
     }
@@ -296,10 +306,10 @@ impl ToSpan for SectionItem {
 }
 
 
-impl Mergable for SectionItem {
+impl Mergable for Item {
 
 
-  fn mergable(&self, other: &SectionItem) -> bool {
+  fn mergable(&self, other: &Item) -> bool {
 
     if !self.is_code() || !other.is_code() {
       return false;
@@ -319,17 +329,18 @@ impl Mergable for SectionItem {
   Attempts tp merge `self` with `other`. This method is asymmetric: it assumes `self` was parsed
   before `other`.
   */
-  fn merged<'a>(&'a mut self, other: &'a mut  SectionItem)
-      -> Merged<&'a mut SectionItem, &'a mut SectionItem>
+  fn merged<'a>(&'a mut self, other: &'a mut Item)
+      -> Merged<&'a mut Item, &'a mut Item>
   {
     if self.item_type() == other.item_type() || self.item_type().is_code() && other.item_type()
         == ItemType::Unknown {
       match self {
-        | SectionItem::User(self_code)
-        | SectionItem::Top(self_code)
-        | SectionItem::Class(self_code)
-        | SectionItem::Init(self_code)
-        | SectionItem::Unknown(self_code)
+        | Item::Class(self_code)
+        | Item::Init(self_code)
+        | Item::Top(self_code)
+        | Item::User(self_code)
+        | Item::ScannerTop(self_code)
+        | Item::Unknown(self_code)
         => {
           // Unwrap always succeeds because of outer `if`.
           let other_code = other.get_code().unwrap();
@@ -340,10 +351,10 @@ impl Mergable for SectionItem {
           }
         }
 
-        | SectionItem::State{..}
-        | SectionItem::Definition { .. }
-        | SectionItem::Include{..}
-        | SectionItem::Option(_) => Merged::No(self, other)
+        | Item::State{..}
+        | Item::Definition { .. }
+        | Item::Include{..}
+        | Item::Option(_) => Merged::No(self, other)
 
       } // end match self
 

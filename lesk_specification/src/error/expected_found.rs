@@ -6,8 +6,8 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
-use crate::parser::ToSpan;
+use super::ToDiagnostic;
+use crate::SourceID;
 
 /// Error that occurs when an item was found, but was expecting something else.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,7 +45,7 @@ impl Display for ExpectedFoundError {
 impl Error for ExpectedFoundError {}
 
 impl ToDiagnostic for ExpectedFoundError {
-    fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+    fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
         let label = Label::primary(file, self.span)
                         .with_message(format!("expected {} here", self.expected));
         Diagnostic::error().with_message(self.to_string()).with_labels(vec![label])

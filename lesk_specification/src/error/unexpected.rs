@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use codespan::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 
-use super::{ToDiagnostic, FileId};
+use super::{ToDiagnostic, SourceID};
 use crate::parser::ToSpan;
 
 /// Error that occurs when an unexpected token was found.
@@ -47,7 +47,7 @@ impl Display for UnexpectedError {
 impl Error for UnexpectedError {}
 
 impl ToDiagnostic for UnexpectedError {
-  fn to_diagnostic(&self, file: FileId) -> Diagnostic<FileId> {
+  fn to_diagnostic(&self, file: SourceID) -> Diagnostic<SourceID> {
     let labels =
         vec![Label::primary(file, self.span).with_message("found unexpected token here")];
     Diagnostic::error().with_message(self.to_string()).with_labels(labels)
