@@ -1,11 +1,6 @@
-pub mod parser;
-mod source;
 mod whitespace;
+pub mod parser;
 
-pub use source::*;
 pub use super::options::{OptionSet, OptionField};
 
-pub use saucepan::Span;
-
-
-pub type InputType<'a> = LSpan<'a>;
+pub use saucepan::{Span, SourceID, Source, Sources};

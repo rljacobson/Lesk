@@ -1,9 +1,10 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 use std::io::Read;
 use std::fs::File;
 use std::collections::HashMap;
 
+#[allow(unused_imports)]
 // region Use Nom
 use nom::{
   character::complete::{anychar, line_ending, multispace0, crlf, space0},
@@ -127,12 +128,13 @@ use crate::{
 
 // todo: make typedef for Errors
 
+type InputType<'s> = Span<&'s str>;
+
 // trait Parser<'a>: NomParser<InputType<'a>, InputType<'a>, Errors> {}
 
-pub type Result<'a> = NomResult<InputType<'a>, InputType<'a>, Errors>;
-pub type PResult<'a> = NomResult<InputType<'a>, Span<'a>, Errors>;
-pub type IResult<'a> = NomResult<InputType<'a>, Item, Errors>;
-pub type SResult<'a> = NomResult<InputType<'a>, SectionItemSet, Errors>;
+pub type Result<'a>  = NomResult<InputType<'a>, InputType<'a>, Errors>;
+pub type IResult<'a> = NomResult<InputType<'a>, Item<'a>, Errors>;
+pub type SResult<'a> = NomResult<InputType<'a>, SectionItemSet<'a>, Errors>;
 
 // region Section One
 
@@ -360,7 +362,7 @@ ItemType::User
 ItemType::Unknown
 ```
 */
-fn parse_code_type(item_type: ItemType) -> impl Fn(InputType) -> PResult {
+fn parse_code_type(item_type: ItemType) -> impl Fn(InputType) -> Result {
   move |input| {
     tag(item_type.open_delimiter())(input)
         .and_then(
@@ -493,7 +495,7 @@ case, inner code is assigned the same code type as the outermost block.
 */
 // todo: Continue parsing after errors.
 // todo: Do we have a use for `brace_level` or `block_level`
-pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> PResult<'a> {
+pub fn parse_nested_code<'a>(i: InputType<'a>, item_type: ItemType) -> Result<'a> {
   map::<_, _, _, Errors, _, _>(
     many_till(
 
@@ -689,7 +691,7 @@ pub fn section_two(i: InputType) -> SResult {
   // Section Two starts with an optional code section for code local to the scanner routine. The
   // code is either surrounded by `%{ ... %}` or is indented. We store such code in
   // `Item::ScannerTop`.
-  let (rest, mut scanner_top_code) =
+  let (_rest, mut scanner_top_code) =
     fold_many0(
       alt((
 
@@ -877,20 +879,20 @@ fn parse_quoted(i: InputType) -> Result {
 
 
 
-fn consolidate_code(mut code: Vec<Span>, item_type: InputType) -> Span {
+fn consolidate_code(mut code: Vec<InputType>, item_type: InputType) -> InputType {
   // Consolidate parsed value
   if code.is_empty() {
-    return close_delim_item.to_span();
+    return close_delim_item;
   }
 
   let mut first_span = code.first().unwrap().into();
 
   let code_span = code[1..].iter_mut().fold(
     first_span,
-    |mut acc: Span, mut next| {
-      match acc.merged(&mut next.to_span()) {
-        Merged::Yes(s) => { /* pass */ }
-        Merged::No(s, _) => {
+    |mut acc: InputType, mut next| {
+      match acc.merged(&mut next) {
+        Merged::Yes(_s) => { /* pass */ }
+        Merged::No(_s, _) => {
           println!("Non contiguous {}: {} <--> {}", item_type, acc, next.to_span());
         }
       };

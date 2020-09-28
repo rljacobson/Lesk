@@ -30,5 +30,5 @@ saucepan = {path = "saucepan" }
 #strum_macros   = "0.19"
 #num_enum       = "0.5.1" # Primitive <--> Enum conversions
 
-[workspace]
-members = ["lesk_specification", "saucepan"]
+#[workspace]
+#members = ["lesk_specification", "saucepan"]
