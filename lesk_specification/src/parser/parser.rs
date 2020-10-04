@@ -128,7 +128,7 @@ use crate::{
 
 // todo: make typedef for Errors
 
-type InputType<'s> = Span<&'s str>;
+type InputType<'s> = Span<'s, &'s str>;
 
 // trait Parser<'a>: NomParser<InputType<'a>, InputType<'a>, Errors> {}
 
@@ -647,14 +647,14 @@ fn parse_include(i: InputType) -> SResult {
 
   let included_items = files.iter().map(|in_file| {
     // retrieve and parse the contents of the file
-    let mut new_source = String::default();
+    let mut filename = String::default();
 
     std::fs::File::open(in_file.fragment())
         .expect(
           // todo: Make a proper diagnostic for this
           format!("Could not read from file: {}", &in_file).as_str()
         )
-        .read_to_string(&mut new_source)
+        .read_to_string(&mut filename)
         .unwrap_or_else(
           // todo: Make a proper diagnostic for this
           |x| { panic!("Could not read from included file: {:?}", x.into_inner()); }
@@ -662,8 +662,13 @@ fn parse_include(i: InputType) -> SResult {
 
 
     // todo: Figure out how to implement SourceFile, give it to codespan_reporting.
+    let new_source = Source::new(in_file.fragment().to_string(), new_source.as_str());
 
-    match section_one(InputType::new(new_source.as_str())) {
+    match section_one(InputType::new(
+      0,
+      new_source.len(),
+      &new_source,
+    )) {
       Ok((_rest, section_items)) => section_items,
       Err(errors) => {
         panic!("{}", errors);
